@@ -1,0 +1,1289 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>索尼创意外观模拟器 · RAW 预览</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Semi+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --stage:#c4c7cb; --panel:#f3f4f5; --panel-2:#e6e8ea; --line:#d0d4d8;
+  --text:#1c1f23; --muted:#646b74; --accent:#d9670a; --accent-ink:#ffffff;
+  --hud:rgba(20,22,25,.72); --hud-text:#f1f2f3;
+  --font:"Barlow","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",system-ui,sans-serif;
+  --cond:"Barlow Semi Condensed","Barlow","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --stage:#1c1e21; --panel:#26292d; --panel-2:#30343a; --line:#3b4047;
+    --text:#eceef0; --muted:#98a0a9; --accent:#ff8f1f; --accent-ink:#1c1e21;
+  }
+}
+:root[data-theme="dark"]{
+  --stage:#1c1e21; --panel:#26292d; --panel-2:#30343a; --line:#3b4047;
+  --text:#eceef0; --muted:#98a0a9; --accent:#ff8f1f; --accent-ink:#1c1e21;
+}
+*,*::before,*::after{box-sizing:border-box}
+html{height:100%;scroll-padding-top:env(safe-area-inset-top,0px)}
+body{height:100%;margin:0;background:var(--panel);color:var(--text);font-family:var(--font);font-size:15px;line-height:1.45;-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.app{height:100%;display:grid;grid-template-columns:minmax(0,1fr) 372px;grid-template-rows:auto minmax(0,1fr)}
+.top{grid-column:1/-1;display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:baseline;gap:10px;margin-right:auto;min-width:0}
+.brand b{font-family:var(--cond);font-weight:700;font-size:20px;letter-spacing:.01em}
+.brand span{color:var(--muted);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.btn{display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 14px;border-radius:6px;border:1px solid var(--line);background:var(--panel-2);cursor:pointer;font-size:14px;font-weight:500;white-space:nowrap}
+.btn:hover{border-color:var(--muted)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+
+.stage{position:relative;background:var(--stage);overflow:hidden;touch-action:none;min-height:0}
+#gl{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:grab}
+#gl.dragging{cursor:grabbing}
+.empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center;color:var(--muted);pointer-events:none}
+.empty .frame{pointer-events:auto;border:1.5px dashed var(--line);border-radius:14px;padding:36px 32px;max-width:460px;background:color-mix(in srgb,var(--panel) 55%,transparent)}
+.empty h2{margin:0 0 6px;font-family:var(--cond);font-weight:600;font-size:24px;color:var(--text)}
+.empty p{margin:0 0 18px;font-size:14px}
+.empty .row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+.stage.drag-over .empty .frame{border-color:var(--accent)}
+.busy{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:color-mix(in srgb,var(--stage) 70%,transparent);font-family:var(--cond);font-size:18px;font-weight:600}
+.busy.on{display:flex}
+
+.hud{position:absolute;color:var(--hud-text);background:var(--hud);border-radius:8px;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+.badge{top:12px;left:12px;display:flex;align-items:center;gap:10px;padding:6px 12px 6px 6px}
+.badge .code{font-family:var(--cond);font-weight:700;font-size:18px;background:var(--hud-text);color:#1c1e21;border-radius:4px;padding:1px 7px;min-width:34px;text-align:center}
+.badge .nm{font-size:14px}
+.histo{top:12px;right:12px;padding:6px}
+.histo canvas{display:block;width:168px;height:72px}
+.bar{left:12px;right:12px;bottom:12px;display:flex;align-items:center;gap:14px;padding:6px 8px 6px 14px;font-size:13px;flex-wrap:wrap}
+.bar .meta{display:flex;gap:14px;flex-wrap:wrap;margin-right:auto;min-width:0;font-variant-numeric:tabular-nums}
+.bar .meta span{white-space:nowrap}
+.bar .meta .dim{opacity:.7}
+.tools{display:flex;gap:4px;align-items:center}
+.tbtn{height:30px;padding:0 10px;border-radius:5px;border:0;background:rgba(255,255,255,.1);color:var(--hud-text);cursor:pointer;font-size:13px;font-variant-numeric:tabular-nums}
+.tbtn:hover{background:rgba(255,255,255,.2)}
+.tbtn.on{background:var(--hud-text);color:#1c1e21}
+.hidden{display:none!important}
+.btn.live{border-color:#e5484d;color:#e5484d}
+.btn.live::before{content:"";width:8px;height:8px;border-radius:50%;background:#e5484d}
+.meta .rec{color:#ff6b6b;font-weight:600}
+
+.split{position:absolute;top:0;bottom:0;width:0;border-left:1.5px solid rgba(255,255,255,.9);box-shadow:0 0 0 .5px rgba(0,0,0,.4);pointer-events:none}
+.split .grip{position:absolute;top:50%;left:-17px;width:34px;height:34px;margin-top:-17px;border-radius:50%;background:#f1f2f3;color:#1c1e21;display:flex;align-items:center;justify-content:center;pointer-events:auto;cursor:ew-resize;font-family:var(--cond);font-weight:700;font-size:13px;box-shadow:0 1px 4px rgba(0,0,0,.4);touch-action:none}
+.split .lab{position:absolute;top:60px;font-size:12px;color:var(--hud-text);background:var(--hud);padding:2px 8px;border-radius:4px;white-space:nowrap}
+.split .lab.l{right:10px}.split .lab.r{left:10px}
+
+.panel{background:var(--panel);border-left:1px solid var(--line);overflow-y:auto;overscroll-behavior:contain;padding:14px 16px 28px}
+.seg{display:grid;grid-template-columns:1fr 1fr;background:var(--panel-2);border-radius:8px;padding:3px;margin-bottom:14px}
+.seg button{border:0;background:transparent;height:32px;border-radius:6px;cursor:pointer;font-weight:500;color:var(--muted)}
+.seg button[aria-pressed="true"]{background:var(--panel);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.12)}
+.tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.tile{position:relative;border:0;padding:0;background:transparent;cursor:pointer;text-align:left}
+.tile .th{position:relative;border-radius:6px;overflow:hidden;background:var(--panel-2);aspect-ratio:3/2;outline:2px solid transparent;outline-offset:1px}
+.tile canvas{display:block;width:100%;height:100%}
+.tile .code{position:absolute;left:4px;bottom:4px;font-family:var(--cond);font-weight:700;font-size:12px;line-height:1;padding:3px 5px;border-radius:3px;background:rgba(20,22,25,.72);color:#f1f2f3}
+.tile .nm{display:block;margin-top:4px;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile[aria-pressed="true"] .th{outline-color:var(--accent)}
+.tile[aria-pressed="true"] .code{background:var(--accent);color:var(--accent-ink)}
+.tile[aria-pressed="true"] .nm{color:var(--text)}
+
+.sec{margin-top:22px}
+.sec-h{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px;gap:8px}
+.sec-h h3{margin:0;font-family:var(--cond);font-weight:600;font-size:17px}
+.sec-h h3 small{font-family:var(--font);font-weight:400;font-size:13px;color:var(--muted);margin-left:6px}
+.link{border:0;background:none;color:var(--accent);cursor:pointer;font-size:13px;padding:2px 0}
+.prow{display:grid;grid-template-columns:70px 26px minmax(0,1fr) 26px 38px;align-items:center;gap:6px;min-height:38px}
+.prow label{font-size:14px}
+.prow.off{opacity:.38;pointer-events:none}
+.step{width:26px;height:26px;border-radius:5px;border:1px solid var(--line);background:var(--panel-2);cursor:pointer;font-size:15px;line-height:1;padding:0}
+.val{font-family:var(--cond);font-weight:600;font-size:16px;text-align:right;font-variant-numeric:tabular-nums;cursor:default}
+.val.nz{color:var(--accent)}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:26px;background:transparent;margin:0}
+input[type=range]::-webkit-slider-runnable-track{height:3px;border-radius:2px;background:var(--line)}
+input[type=range]::-moz-range-track{height:3px;border-radius:2px;background:var(--line)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;margin-top:-6.5px;border-radius:50%;background:var(--accent);border:2px solid var(--panel)}
+input[type=range]::-moz-range-thumb{width:13px;height:13px;border-radius:50%;background:var(--accent);border:2px solid var(--panel)}
+
+.chips{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.chip{height:34px;border-radius:6px;border:1px solid var(--line);background:var(--panel-2);cursor:pointer;font-size:13px;padding:0 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
+.sub{margin-top:10px}
+.seg.sm{margin:0}.seg.sm button{height:28px;font-size:13px}
+.seg3{grid-template-columns:repeat(3,1fr)}
+.badge .wb{font-family:var(--cond);font-weight:600;font-size:13px;opacity:.85;padding-left:10px;border-left:1px solid rgba(255,255,255,.25)}
+.wbwrap{display:grid;grid-template-columns:auto 1fr;gap:14px;align-items:center}
+#wb{width:176px;height:176px;border-radius:6px;cursor:crosshair;touch-action:none;display:block}
+.wbinfo{font-size:13px;color:var(--muted)}
+.wbinfo .rd{display:block;font-family:var(--cond);font-weight:600;font-size:22px;color:var(--text);margin-bottom:4px;font-variant-numeric:tabular-nums}
+.note{margin-top:20px;font-size:12.5px;color:var(--muted);line-height:1.55}
+.toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:#26292d;color:#eceef0;padding:10px 16px;border-radius:8px;font-size:14px;box-shadow:0 4px 18px rgba(0,0,0,.3);opacity:0;pointer-events:none;transition:opacity .2s;max-width:90vw;z-index:10}
+.toast.on{opacity:1}
+
+@media (max-width:860px){
+  html,body{height:auto}
+  .app{height:auto;grid-template-columns:1fr;grid-template-rows:auto 58vh auto}
+  .top{position:sticky;top:env(safe-area-inset-top,0px);z-index:5}
+  .brand span{display:none}
+  .panel{border-left:0;border-top:1px solid var(--line);overflow:visible}
+  .histo{display:none}
+  .bar .meta .opt{display:none}
+}
+@media (max-width:480px){
+  .top{padding:8px 10px;gap:6px}.btn{padding:0 10px}
+  .tiles{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+@media (prefers-reduced-motion:reduce){.toast{transition:none}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand"><b>创意外观模拟器</b><span>RAW 预览 · 模拟索尼机内创意外观与创意风格</span></div>
+    <button class="btn" id="camBtn" title="用摄像头实时预览外观效果">摄像头</button>
+    <button class="btn" id="openBtn" title="打开 RAW 或图片文件">打开文件</button>
+    <button class="btn primary" id="exportBtn" disabled>导出 JPEG</button>
+    <input type="file" id="file" hidden accept="image/*,.arw,.srf,.sr2,.cr2,.cr3,.nef,.nrw,.dng,.raf,.orf,.rw2,.pef,.srw,.3fr,.iiq,.erf,.kdc,.mrw,.x3f">
+  </header>
+
+  <main class="stage" id="stage">
+    <canvas id="gl"></canvas>
+    <div class="empty" id="empty">
+      <div class="frame">
+        <h2>拖入一张 RAW</h2>
+        <p>支持索尼 ARW，以及 CR2/CR3、NEF、DNG、RAF、ORF、RW2 等，也可以直接用 JPEG/PNG。文件只在本机浏览器里处理，不会上传。</p>
+        <div class="row">
+          <button class="btn primary" id="openBtn2">选择文件</button>
+          <button class="btn" id="demoBtn">用色卡试试</button>
+          <button class="btn" id="camBtn2">打开摄像头</button>
+        </div>
+      </div>
+    </div>
+    <div class="busy" id="busy">正在解析…</div>
+
+    <div class="split hidden" id="split">
+      <span class="lab l" id="labL">原图</span><span class="lab r" id="labR">效果</span>
+      <div class="grip" id="grip" role="slider" tabindex="0" aria-label="对比分割线">⟷</div>
+    </div>
+
+    <div class="hud badge hidden" id="badge"><span class="code" id="bCode">ST</span><span class="nm" id="bName">标准</span><span class="wb" id="bWB"></span></div>
+    <div class="hud histo hidden" id="histo"><canvas id="hist" width="336" height="144"></canvas></div>
+    <div class="hud bar hidden" id="bar">
+      <div class="meta" id="meta"></div>
+      <div class="tools">
+        <button class="tbtn" id="fitBtn" title="适合窗口（双击画面切换）">适合</button>
+        <button class="tbtn" id="oneBtn" title="100% 查看细节">100%</button>
+        <button class="tbtn" id="cmpBtn" title="左右分屏对比">对比</button>
+        <button class="tbtn hidden" id="swapBtn" title="调换原图与效果的左右位置（快捷键 S）">⇄ 调换</button>
+        <button class="tbtn hidden" id="mirrorBtn" title="水平镜像">镜像</button>
+        <button class="tbtn hidden" id="flipCamBtn" title="切换到下一个摄像头">切换镜头</button>
+        <button class="tbtn" id="holdBtn" title="按住查看原图（快捷键 \）">按住看原图</button>
+      </div>
+    </div>
+  </main>
+
+  <aside class="panel" id="panel">
+    <div class="seg" role="group" aria-label="模式">
+      <button id="mLook" aria-pressed="true">创意外观</button>
+      <button id="mStyle" aria-pressed="false">创意风格</button>
+    </div>
+    <div class="tiles" id="tiles"></div>
+
+    <section class="sec">
+      <div class="sec-h"><h3 id="pTitle">外观参数</h3><button class="link" id="resetLook">重置此外观</button></div>
+      <div id="rows"></div>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><h3>曝光</h3><button class="link" id="resetEV">重置</button></div>
+      <div id="evRow"></div>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><h3>白平衡<small>对所有外观生效</small></h3><button class="link" id="resetCommon">重置</button></div>
+      <div class="chips" id="wbModes" role="group" aria-label="白平衡模式"></div>
+      <div class="sub hidden" id="kRow"></div>
+      <div class="sub hidden" id="awbRow">
+        <div class="seg sm seg3" role="group" aria-label="AWB 优先级">
+          <button data-p="std" aria-pressed="true">标准</button><button data-p="amb" aria-pressed="false">环境优先</button><button data-p="white" aria-pressed="false">白色优先</button>
+        </div>
+      </div>
+      <div class="wbwrap" style="margin-top:12px">
+        <canvas id="wb" width="348" height="348" tabindex="0" aria-label="白平衡偏移，方向键调整"></canvas>
+        <div class="wbinfo"><span class="rd" id="wbRd">0</span>白平衡偏移<br>左右 B↔A，上下 G↔M，步进 0.5<br>点击或拖动设置，双击归零</div>
+      </div>
+    </section>
+
+    <p class="note">RAW 文件读取的是相机写入的嵌入预览（机内已按拍摄时白平衡和标准风格渲染），白平衡预设以“拍摄时 ≈ 5500K”为基准换算；再在其上用 GPU 模拟各外观的色调曲线、色相与分离色调。效果是近似还原，不等同于相机的实际处理；预览分辨率取决于机型写入的嵌入 JPEG。←/→ 可切换外观。</p>
+  </aside>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+"use strict";
+const $ = s => document.querySelector(s);
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+
+/* ---------------- Look definitions ---------------- */
+const BASE = {c:0, hi:0, sh:0, fade:0, sat:1, vib:0, temp:0, tint:0, ev:0, sharp:0, clar:0,
+  shT:[0,0,0], hiT:[0,0,0], bs:[1,1,1,1,1,1], bh:[0,0,0,0,0,0], mono:0, monoW:[0.3,0.59,0.11], monoTone:[1,1,1]};
+const L = o => Object.assign({}, BASE, o);
+// bands order: red, yellow, green, cyan, blue, magenta
+const LOOKS = {
+  look: [
+    L({id:"ST", code:"ST", name:"标准", c:.10, sat:1.06}),
+    L({id:"PT", code:"PT", name:"人像", c:.0, sat:.94, sh:.03, hi:-.02, temp:.012, bs:[.92,.95,1,1,1,1], bh:[4,0,0,0,0,0], sharp:-.2, clar:-.1}),
+    L({id:"NT", code:"NT", name:"中性", c:-.2, sat:.78, sh:.04, hi:-.03, sharp:-.1}),
+    L({id:"VV", code:"VV", name:"鲜艳", c:.24, sat:1.32, vib:.1, sh:-.02, bs:[1.1,1.05,1.1,1.05,1.12,1.05]}),
+    L({id:"VV2", code:"VV2", name:"鲜艳 2", c:.08, sat:1.28, ev:.12, sh:.05, clar:.15, vib:.15, bs:[1.05,1.12,1.08,1.1,1.05,1]}),
+    L({id:"FL", code:"FL", name:"胶片", c:.18, sat:.8, fade:.035, hi:-.03, shT:[-.025,.005,.03], hiT:[.03,.012,-.02], bs:[.95,.9,.72,.85,.9,.85], bh:[0,-4,-10,-6,-8,0], sharp:-.05}),
+    // FL2: slightly raised contrast, subdued colours, nostalgic; cool-magenta cast (reds→magenta, blues→violet, greens→cyan)
+    L({id:"FL2", code:"FL2", name:"胶片 2", c:.08, sat:.82, fade:.02, tint:.015, temp:-.005, shT:[.005,-.006,.016], hiT:[.014,0,.01], bs:[.9,.8,.78,.9,.85,.92], bh:[-5,-8,8,0,6,0], sharp:-.05}),
+    // FL3: gently lowered contrast, clear colours, light overall; orange reds, cyan blues, muted greens/yellows
+    L({id:"FL3", code:"FL3", name:"胶片 3", ev:.1, c:-.08, sat:1.08, tint:.008, shT:[-.02,.01,.025], hiT:[.025,.01,-.015], bs:[1.12,.78,.72,1.0,1.1,.9], bh:[8,-6,-4,-4,-14,0], clar:.05}),
+    L({id:"IN", code:"IN", name:"即时", c:.02, sat:.78, fade:.08, temp:.035, hi:-.08, shT:[.03,.012,-.015], hiT:[.02,.015,-.01], bs:[1,1.08,.85,.8,.78,.9], bh:[4,0,-6,0,0,0]}),
+    L({id:"SH", code:"SH", name:"柔和高调", ev:.4, c:-.2, sat:.82, fade:.035, sh:.06, tint:.012, hiT:[0,.008,.02], clar:-.2, sharp:-.1}),
+    L({id:"BW", code:"BW", name:"黑白", mono:1, c:.14}),
+    L({id:"SE", code:"SE", name:"深褐色", mono:1, c:.06, fade:.02, monoTone:[1.16,1.0,.78]}),
+  ],
+  style: [
+    L({id:"std", code:"Std.", name:"标准", c:.10, sat:1.06}),
+    L({id:"vivid", code:"Vivid", name:"生动", c:.22, sat:1.3}),
+    L({id:"ntrl", code:"Ntrl", name:"中性", c:-.18, sat:.8, sharp:-.1}),
+    L({id:"clear", code:"Clear", name:"清澈", c:.05, hi:.04, clar:.12, sharp:.1}),
+    L({id:"deep", code:"Deep", name:"深色", c:.28, ev:-.25, sat:1.1, sh:-.03}),
+    L({id:"light", code:"Light", name:"轻淡", ev:.3, c:-.12, sat:.95, sh:.05}),
+    L({id:"port", code:"Port.", name:"人像", c:0, sat:.94, sh:.03, temp:.012, bs:[.92,.95,1,1,1,1], bh:[4,0,0,0,0,0], sharp:-.2, clar:-.1}),
+    L({id:"land", code:"Land.", name:"风景", c:.18, sat:1.18, bs:[1,1.05,1.22,1.2,1.2,1], sharp:.2}),
+    L({id:"sunset", code:"Sunset", name:"黄昏", c:.12, sat:1.15, temp:.06, bs:[1.2,1.18,1,1,.95,1.05]}),
+    L({id:"night", code:"Night", name:"夜景", c:.2, ev:-.2, sat:.95, sh:-.04}),
+    L({id:"autumn", code:"Autm.", name:"红叶", c:.1, sat:1.08, temp:.02, bs:[1.3,1.28,.92,.95,.95,1.05], bh:[0,-6,-12,0,0,0]}),
+    L({id:"bw", code:"B/W", name:"黑白", mono:1, c:.14}),
+    L({id:"sepia", code:"Sepia", name:"棕褐色", mono:1, c:.06, fade:.02, monoTone:[1.16,1.0,.78]}),
+  ]
+};
+const PARAMS = {
+  look: [
+    {k:"contrast", n:"对比度", min:-9, max:9, d:0},
+    {k:"highlights", n:"高光", min:-9, max:9, d:0},
+    {k:"shadows", n:"阴影", min:-9, max:9, d:0},
+    {k:"fade", n:"褪色", min:0, max:9, d:0},
+    {k:"saturation", n:"饱和度", min:-9, max:9, d:0, color:true},
+    {k:"sharpness", n:"锐度", min:-9, max:9, d:0},
+    {k:"range", n:"锐度范围", min:1, max:5, d:3, plain:true},
+    {k:"clarity", n:"清晰度", min:-9, max:9, d:0},
+  ],
+  style: [
+    {k:"contrast", n:"对比度", min:-3, max:3, d:0},
+    {k:"saturation", n:"饱和度", min:-3, max:3, d:0, color:true},
+    {k:"sharpness", n:"锐度", min:-3, max:3, d:0},
+  ]
+};
+
+/* ---------------- State ---------------- */
+const KEY = "sony-look-sim-v1";
+let state = {mode:"look", sel:{look:"ST", style:"std"}, params:{}, ev3:0, wb:{ab:0, gm:0}};
+try { const s = JSON.parse(localStorage.getItem(KEY) || "null"); if (s && s.sel) state = Object.assign(state, s); } catch(e) {}
+let saveT = 0;
+function persist(){ clearTimeout(saveT); saveT = setTimeout(() => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch(e) {} }, 300); }
+const curLook = () => LOOKS[state.mode].find(l => l.id === state.sel[state.mode]) || LOOKS[state.mode][0];
+function paramsFor(mode, id){
+  const key = mode + ":" + id;
+  if (!state.params[key]) { const p = {}; PARAMS[mode].forEach(d => p[d.k] = d.d); state.params[key] = p; }
+  return state.params[key];
+}
+
+function uniformsFor(mode, look, p){
+  const u = {};
+  if (mode === "look") {
+    u.contrast = Math.max(.3, 1 + look.c + p.contrast * .055);
+    u.hi = look.hi + p.highlights * .014;
+    u.sh = look.sh + p.shadows * .012;
+    u.fade = Math.max(0, look.fade + p.fade * .016);
+    u.sat = look.sat * Math.max(0, 1 + p.saturation * .07);
+    u.sharp = Math.max(-1, look.sharp + p.sharpness * .12);
+    u.sharpR = [.6,.9,1.3,1.8,2.5][clamp(p.range,1,5) - 1];
+    u.clar = look.clar + p.clarity * .07;
+  } else {
+    u.contrast = Math.max(.3, 1 + look.c + p.contrast * .09);
+    u.hi = look.hi; u.sh = look.sh; u.fade = look.fade;
+    u.sat = look.sat * Math.max(0, 1 + p.saturation * .12);
+    u.sharp = Math.max(-1, look.sharp + p.sharpness * .22);
+    u.sharpR = 1.1;
+    u.clar = look.clar;
+  }
+  u.vib = look.vib; u.ev = look.ev + state.ev3 / 3;
+  const w = wbGains();
+  u.wb = [w[0] * (1 + look.temp), w[1] * (1 - look.tint), w[2] * (1 - look.temp)];
+  u.shT = look.shT; u.hiT = look.hiT; u.bs = look.bs; u.bh = look.bh;
+  u.mono = look.mono; u.monoW = look.monoW; u.monoTone = look.monoTone;
+  return u;
+}
+
+/* ---------------- White balance ---------------- */
+const REF_K = 5500; // as-shot assumed reference
+const WB_MODES = [
+  {id:"asshot", n:"拍摄时", code:"原始"},
+  {id:"auto", n:"自动 AWB", code:"AWB"},
+  {id:"day", n:"日光", k:5500, code:"日光"},
+  {id:"shade", n:"阴影", k:7500, code:"阴影"},
+  {id:"cloudy", n:"阴天", k:6500, code:"阴天"},
+  {id:"tungsten", n:"白炽灯", k:3200, code:"白炽灯"},
+  {id:"fl-warm", n:"荧光灯 暖白", k:3000, tint:.03, code:"荧光 -1"},
+  {id:"fl-cool", n:"荧光灯 冷白", k:4000, tint:.03, code:"荧光 0"},
+  {id:"fl-day", n:"荧光灯 昼白", k:5000, tint:.025, code:"荧光 +1"},
+  {id:"fl-dl", n:"荧光灯 日光", k:6500, tint:.02, code:"荧光 +2"},
+  {id:"flash", n:"闪光灯", k:5800, code:"闪光"},
+  {id:"kelvin", n:"色温", code:"K"},
+];
+const AWB_STRENGTH = {std:.75, amb:.45, white:.95};
+if (!state.wbMode) state.wbMode = "asshot";
+if (!state.wbK) state.wbK = 5500;
+if (!state.awbPri) state.awbPri = "std";
+function kToRGB(T){
+  T = clamp(T, 1667, 25000);
+  const x = T <= 4000 ? -0.2661239e9/T**3 - 0.2343589e6/T**2 + 0.8776956e3/T + 0.179910
+                      : -3.0258469e9/T**3 + 2.1070379e6/T**2 + 0.2226347e3/T + 0.240390;
+  const y = T <= 2222 ? -1.1063814*x**3 - 1.34811020*x**2 + 2.18555832*x - 0.20219683
+          : T <= 4000 ? -0.9549476*x**3 - 1.37418593*x**2 + 2.09137015*x - 0.16748867
+                      :  3.0817580*x**3 - 5.87338670*x**2 + 3.75112997*x - 0.37001483;
+  const X = x / y, Z = (1 - x - y) / y;
+  return [3.2406*X - 1.5372 - 0.4986*Z, -0.9689*X + 1.8758 + 0.0415*Z, 0.0557*X - 0.2040 + 1.0570*Z];
+}
+const REF_RGB = kToRGB(REF_K);
+// Gains applied to the as-shot (linear) image to simulate the chosen camera WB.
+function wbGains(){
+  const mode = WB_MODES.find(m => m.id === state.wbMode) || WB_MODES[0];
+  let base = [1, 1, 1], targetK = REF_K, tint = mode.tint || 0;
+  if (mode.id === "auto" && img && img.awb) { const s = AWB_STRENGTH[state.awbPri] || .75; base = img.awb.map(g => Math.pow(g, s)); }
+  else if (mode.id === "kelvin") targetK = state.wbK;
+  else if (mode.k) targetK = mode.k;
+  // A-B: 10 mired per step, amber = warmer image = higher effective camera K
+  const mired = 1e6 / targetK - state.wb.ab * 10;
+  const t = kToRGB(1e6 / clamp(mired, 40, 600));
+  const g = [REF_RGB[0] / t[0], REF_RGB[1] / t[1], REF_RGB[2] / t[2]];
+  const gm = 1 - state.wb.gm * .02 - tint;
+  return [base[0] * g[0] / g[1], base[1] * gm, base[2] * g[2] / g[1]];
+}
+const fmtShift = (ab, gm, sep) => [ab > 0 ? "A" + ab.toFixed(1) : ab < 0 ? "B" + (-ab).toFixed(1) : "", gm < 0 ? "G" + (-gm).toFixed(1) : gm > 0 ? "M" + gm.toFixed(1) : ""].filter(Boolean).join(sep);
+function wbLabel(){
+  const mode = WB_MODES.find(m => m.id === state.wbMode) || WB_MODES[0];
+  const {ab, gm} = state.wb;
+  const sh = fmtShift(ab, gm, " ");
+  const main = mode.id === "kelvin" ? state.wbK + "K" : mode.id === "auto" ? "AWB" + ({std:"", amb:" 环境", white:" 白色"}[state.awbPri]) : mode.code;
+  return main + (sh ? " " + sh : "");
+}
+
+/* ---------------- RAW / EXIF parsing ---------------- */
+function parseTiff(u8, base){
+  if (base + 8 > u8.length) return null;
+  const bo = String.fromCharCode(u8[base], u8[base+1]);
+  if (bo !== "II" && bo !== "MM") return null;
+  const le = bo === "II";
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  const n = u8.length;
+  const u16 = o => dv.getUint16(o, le), u32 = o => dv.getUint32(o, le);
+  const magic = u16(base + 2);
+  if (![42, 0x4F52, 0x5352, 0x55].includes(magic)) return null;
+  const SZ = {1:1,2:1,3:2,4:4,5:8,6:1,7:1,8:2,9:4,10:8,11:4,12:8,13:4};
+  function readIFD(off){
+    const p = base + off;
+    if (p + 2 > n) return null;
+    const cnt = u16(p);
+    if (cnt === 0 || cnt > 1000 || p + 2 + cnt * 12 + 4 > n) return null;
+    const tags = new Map();
+    for (let i = 0; i < cnt; i++) {
+      const e = p + 2 + i * 12, type = u16(e + 2), count = u32(e + 4), sz = (SZ[type] || 1) * count;
+      tags.set(u16(e), {type, count, vo: sz <= 4 ? e + 8 : base + u32(e + 8)});
+    }
+    return {tags, next: u32(p + 2 + cnt * 12)};
+  }
+  function num(t, i = 0){
+    if (!t) return undefined;
+    const o = t.vo;
+    try {
+      switch (t.type) {
+        case 1: case 7: return u8[o + i];
+        case 3: return u16(o + i * 2);
+        case 4: case 13: return u32(o + i * 4);
+        case 9: return dv.getInt32(o + i * 4, le);
+        case 5: { const d = u32(o + i*8 + 4); return d ? u32(o + i*8) / d : 0; }
+        case 10: { const d = dv.getInt32(o + i*8 + 4, le); return d ? dv.getInt32(o + i*8, le) / d : 0; }
+      }
+    } catch(e) {}
+    return undefined;
+  }
+  function str(t){
+    if (!t || t.vo + t.count > n) return "";
+    let s = ""; for (let i = 0; i < t.count && u8[t.vo + i]; i++) s += String.fromCharCode(u8[t.vo + i]);
+    return s.trim();
+  }
+  const meta = {}, jpegs = [];
+  const seen = new Set();
+  const queue = [{off: u32(base + 4), root: true}];
+  let guard = 0;
+  while (queue.length && guard++ < 64) {
+    const {off, root} = queue.shift();
+    if (!off || seen.has(off)) continue;
+    seen.add(off);
+    const ifd = readIFD(off);
+    if (!ifd) continue;
+    const T = ifd.tags;
+    if (root && meta.orientation === undefined && T.has(0x0112)) meta.orientation = num(T.get(0x0112));
+    if (!meta.make && T.has(0x010F)) meta.make = str(T.get(0x010F));
+    if (!meta.model && T.has(0x0110)) meta.model = str(T.get(0x0110));
+    if (T.has(0x0201) && T.has(0x0202)) jpegs.push({off: base + num(T.get(0x0201)), len: num(T.get(0x0202))});
+    const comp = num(T.get(0x0103));
+    if ((comp === 6 || comp === 7) && T.has(0x0111) && T.get(0x0111).count === 1) jpegs.push({off: base + num(T.get(0x0111)), len: num(T.get(0x0117))});
+    if (T.has(0x829A)) meta.exposure = num(T.get(0x829A));
+    if (T.has(0x829D)) meta.fnumber = num(T.get(0x829D));
+    if (T.has(0x8827)) meta.iso = num(T.get(0x8827));
+    if (T.has(0x920A)) meta.focal = num(T.get(0x920A));
+    if (T.has(0xA434)) meta.lens = str(T.get(0xA434));
+    if (T.has(0x9003)) meta.date = str(T.get(0x9003));
+    if (T.has(0x8769)) queue.push({off: num(T.get(0x8769))});
+    if (T.has(0x014A)) { const t = T.get(0x014A); for (let i = 0; i < Math.min(t.count, 8); i++) queue.push({off: num(t.type === 13 ? {...t, type:4} : t, i)}); }
+    if (root && ifd.next) queue.push({off: ifd.next, root: false});
+  }
+  return {meta, jpegs};
+}
+
+// Walk a JPEG stream at `start`. Returns info for browser-decodable (baseline/progressive) JPEGs only.
+function jpegInfo(u8, start){
+  const n = u8.length;
+  if (u8[start] !== 0xFF || u8[start+1] !== 0xD8) return null;
+  let p = start + 2, w = 0, h = 0, sof = 0, exif = -1, guard = 0;
+  while (p < n - 3 && guard++ < 4000) {
+    if (u8[p] !== 0xFF) return null;
+    while (u8[p+1] === 0xFF && p < n - 2) p++;
+    const m = u8[p+1];
+    if (m === 0xD9) return sof ? {start, end: p + 2, w, h, sof, exif} : null;
+    if ((m >= 0xD0 && m <= 0xD7) || m === 0x01) { p += 2; continue; }
+    const len = (u8[p+2] << 8) | u8[p+3];
+    if (len < 2) return null;
+    if (m >= 0xC0 && m <= 0xCF && m !== 0xC4 && m !== 0xC8 && m !== 0xCC) {
+      if (m !== 0xC0 && m !== 0xC1 && m !== 0xC2) return null; // lossless / arithmetic: not a preview
+      sof = m; h = (u8[p+5] << 8) | u8[p+6]; w = (u8[p+7] << 8) | u8[p+8];
+      if (!w || !h) return null;
+    }
+    if (m === 0xE1 && exif < 0 && u8[p+4] === 0x45 && u8[p+5] === 0x78 && u8[p+6] === 0x69 && u8[p+7] === 0x66) exif = p + 10;
+    p += 2 + len;
+    if (m === 0xDA) {
+      if (!sof) return null;
+      // entropy-coded data: find next real marker
+      let q = p;
+      for (;;) {
+        q = u8.indexOf(0xFF, q);
+        if (q < 0 || q >= n - 1) return {start, end: n, w, h, sof, exif};
+        const mk = u8[q+1];
+        if (mk === 0x00 || mk === 0xFF || (mk >= 0xD0 && mk <= 0xD7)) { q++; continue; }
+        break;
+      }
+      p = q;
+    }
+  }
+  return null;
+}
+
+function extractPreview(u8){
+  let meta = {}, best = null;
+  const t = parseTiff(u8, 0);
+  const consider = info => { if (info && (!best || info.w * info.h > best.w * best.h)) best = info; };
+  if (t) { meta = t.meta; for (const c of t.jpegs) if (c.off > 0 && c.off < u8.length) consider(jpegInfo(u8, c.off)); }
+  if (!best || best.w * best.h < 4e6) {
+    let i = 0;
+    const n = u8.length - 3;
+    while (i < n) {
+      i = u8.indexOf(0xD8, i + 1);
+      if (i < 0 || i >= n) break;
+      if (u8[i-1] === 0xFF && u8[i+1] === 0xFF) {
+        const info = jpegInfo(u8, i - 1);
+        if (info) { consider(info); i = info.end; }
+      }
+    }
+  }
+  if (!best) return null;
+  let jpegOri;
+  if (best.exif > 0) {
+    const e = parseTiff(u8, best.exif);
+    if (e) {
+      jpegOri = e.meta.orientation;
+      for (const k of ["make","model","exposure","fnumber","iso","focal","lens","date"]) if (meta[k] === undefined && e.meta[k] !== undefined) meta[k] = e.meta[k];
+    }
+  }
+  return {blob: new Blob([u8.subarray(best.start, best.end)], {type: "image/jpeg"}), w: best.w, h: best.h, meta, jpegOri};
+}
+
+const RAW_EXT = /\.(arw|srf|sr2|cr2|cr3|nef|nrw|dng|raf|orf|rw2|pef|srw|3fr|iiq|erf|kdc|mrw|x3f)$/i;
+
+/* ---------------- WebGL ---------------- */
+const canvas = $("#gl");
+const gl = canvas.getContext("webgl2", {antialias:false, premultipliedAlpha:false, alpha:false});
+const VS = `#version 300 es
+void main(){ vec2 p = vec2(float((gl_VertexID<<1)&2), float(gl_VertexID&2)); gl_Position = vec4(p*2.0-1.0, 0.0, 1.0); }`;
+const FS = `#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform vec2 uTexSize, uCanvas, uImg, uOffset;
+uniform float uScale, uSplit, uSwap, uMaxLod;
+uniform mat3 uOrient;
+uniform vec3 uBg;
+uniform vec3 uWB;
+uniform float uEV, uContrast, uHi, uSh, uFade, uSat, uVib, uSharp, uSharpR, uClar, uMono;
+uniform float uBS[6];
+uniform float uBH[6];
+uniform vec3 uShT, uHiT, uMonoW, uMonoTone;
+out vec4 outColor;
+const vec3 LW = vec3(0.2126, 0.7152, 0.0722);
+float luma(vec3 c){ return dot(c, LW); }
+vec3 s2l(vec3 c){ return mix(c/12.92, pow((c+0.055)/1.055, vec3(2.4)), step(vec3(0.04045), c)); }
+vec3 l2s(vec3 c){ c = max(c, vec3(0.0)); return mix(c*12.92, 1.055*pow(c, vec3(1.0/2.4))-0.055, step(vec3(0.0031308), c)); }
+vec3 shoulder(vec3 x){ const float k = 0.82; vec3 o = max(x - k, 0.0); return min(x, vec3(k)) + (1.0-k)*(1.0-exp(-o/(1.0-k))); }
+vec3 rgb2hsv(vec3 c){
+  vec4 K = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+  vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
+  vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
+  float d = q.x - min(q.w, q.y); float e = 1.0e-10;
+  return vec3(abs(q.z + (q.w - q.y)/(6.0*d + e)), d/(q.x + e), q.x);
+}
+vec3 hsv2rgb(vec3 c){
+  vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+  vec3 p = abs(fract(c.xxx + K.xyz)*6.0 - K.www);
+  return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+}
+vec3 T(vec2 uv, float lod){ return textureLod(uTex, uv, lod).rgb; }
+vec3 grade(vec2 uv, vec3 src){
+  vec3 c = src;
+  float lc = luma(c);
+  if (abs(uSharp) > 0.001) {
+    vec2 t = uSharpR / uTexSize;
+    vec3 s = T(uv+vec2(t.x,0.0),0.0)+T(uv-vec2(t.x,0.0),0.0)+T(uv+vec2(0.0,t.y),0.0)+T(uv-vec2(0.0,t.y),0.0);
+    vec3 d = T(uv+t,0.0)+T(uv-t,0.0)+T(uv+vec2(t.x,-t.y),0.0)+T(uv+vec2(-t.x,t.y),0.0);
+    float blur = luma(s*2.0 + d) / 12.0;
+    c += (luma(T(uv,0.0)) - blur) * uSharp * 1.5;
+  }
+  if (abs(uClar) > 0.001) {
+    float lod = clamp(log2(max(uTexSize.x, uTexSize.y)/220.0), 0.0, uMaxLod);
+    vec2 t = exp2(lod) / uTexSize;
+    float lb = (luma(T(uv,lod))*2.0 + luma(T(uv+vec2(t.x,0.0),lod)) + luma(T(uv-vec2(t.x,0.0),lod)) + luma(T(uv+vec2(0.0,t.y),lod)) + luma(T(uv-vec2(0.0,t.y),lod))) / 6.0;
+    float w = 1.0 - pow(2.0*lc - 1.0, 2.0);
+    c += (lc - lb) * uClar * w * 1.6;
+  }
+  vec3 lin = s2l(clamp(c, 0.0, 1.0)) * exp2(uEV);
+  vec3 m = uWB;
+  lin *= m / dot(m, LW);
+  lin = shoulder(lin);
+  vec3 g = l2s(lin);
+  float l = luma(g);
+  float sm = smoothstep(0.0, 0.18, l) * (1.0 - smoothstep(0.18, 0.62, l));
+  float hm = smoothstep(0.38, 0.92, l);
+  float nl = max(l + uSh*sm + uHi*hm, 0.0);
+  g *= nl / max(l, 1e-4);
+  g = clamp(g, 0.0, 1.0);
+  vec3 ga = pow(g, vec3(uContrast)); vec3 gb = pow(1.0 - g, vec3(uContrast));
+  g = ga / max(ga + gb, vec3(1e-5));
+  vec3 hsv = rgb2hsv(g);
+  float pos = hsv.x * 6.0, sM = 0.0, hS = 0.0;
+  for (int i = 0; i < 6; i++) { float d = abs(pos - float(i)); d = min(d, 6.0 - d); float w = max(0.0, 1.0 - d); sM += w*uBS[i]; hS += w*uBH[i]; }
+  hsv.x = fract(hsv.x + hS/360.0); hsv.y = clamp(hsv.y * sM, 0.0, 1.0);
+  g = hsv2rgb(hsv);
+  l = luma(g);
+  float sat = max(g.r, max(g.g, g.b)) - min(g.r, min(g.g, g.b));
+  g = vec3(l) + (g - vec3(l)) * uSat * (1.0 + uVib*(1.0 - sat));
+  g += uShT*(1.0-l)*(1.0-l) + uHiT*l*l;
+  g = uFade + g*(1.0 - uFade*0.7);
+  if (uMono > 0.0) {
+    float mm = clamp(dot(g, uMonoW), 0.0, 1.0);
+    vec3 toned = vec3(mm) + (uMonoTone - 1.0)*mm*(1.0 - mm)*1.6;
+    g = mix(g, toned, uMono);
+  }
+  return clamp(g, 0.0, 1.0);
+}
+void main(){
+  vec2 fc = vec2(gl_FragCoord.x, uCanvas.y - gl_FragCoord.y);
+  vec2 q = (fc - uOffset) / uScale;
+  vec2 uv = (uOrient * vec3(clamp(q/uImg, 0.0, 1.0), 1.0)).xy;
+  vec3 src = texture(uTex, uv).rgb;
+  if (q.x < 0.0 || q.y < 0.0 || q.x > uImg.x || q.y > uImg.y) { outColor = vec4(uBg, 1.0); return; }
+  bool orig = uSwap > 0.5 ? fc.x >= uSplit : fc.x < uSplit;
+  outColor = vec4(orig ? src : grade(uv, src), 1.0);
+}`;
+
+let prog; const U = new Proxy({}, {get: (t, k) => (k in t ? t[k] : null)});
+function initGL(){
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+  prog = gl.createProgram();
+  gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS));
+  gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  gl.useProgram(prog);
+  gl.bindVertexArray(gl.createVertexArray());
+  const n = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const a = gl.getActiveUniform(prog, i); const nm = a.name.replace(/\[0\]$/, ""); U[nm] = gl.getUniformLocation(prog, a.name); }
+  gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+}
+
+const ORIENT = {
+  1:[1,0,0, 0,1,0, 0,0,1], 2:[-1,0,0, 0,1,0, 1,0,1], 3:[-1,0,0, 0,-1,0, 1,1,1], 4:[1,0,0, 0,-1,0, 0,1,1],
+  5:[0,1,0, 1,0,0, 0,0,1], 6:[0,-1,0, 1,0,0, 0,1,1], 7:[0,-1,0, -1,0,0, 1,1,1], 8:[0,1,0, -1,0,0, 1,0,1]
+};
+let img = null; // {tex, tw, th, W, H, orient, name, meta, kind}
+let bg = [0.2,0.2,0.2];
+
+function setUniforms(u, target, view, split){
+  gl.uniform2f(U.uTexSize, img.tw, img.th);
+  gl.uniform2f(U.uCanvas, target.w, target.h);
+  gl.uniform2f(U.uImg, img.W, img.H);
+  gl.uniform2f(U.uOffset, view.ox, view.oy);
+  gl.uniform1f(U.uScale, view.scale);
+  gl.uniform1f(U.uSplit, split);
+  gl.uniform1f(U.uSwap, split > 0 && split < 1e8 && target.screen && swapSides ? 1 : 0);
+  gl.uniform1f(U.uMaxLod, Math.floor(Math.log2(Math.max(img.tw, img.th))));
+  gl.uniformMatrix3fv(U.uOrient, false, ORIENT[img.orient] || ORIENT[1]);
+  gl.uniform3fv(U.uBg, bg);
+  gl.uniform1f(U.uEV, u.ev); gl.uniform3fv(U.uWB, u.wb);
+  gl.uniform1f(U.uContrast, u.contrast); gl.uniform1f(U.uHi, u.hi); gl.uniform1f(U.uSh, u.sh);
+  gl.uniform1f(U.uFade, u.fade); gl.uniform1f(U.uSat, u.sat); gl.uniform1f(U.uVib, u.vib);
+  gl.uniform1f(U.uSharp, u.sharp); gl.uniform1f(U.uSharpR, u.sharpR); gl.uniform1f(U.uClar, u.clar);
+  gl.uniform1f(U.uMono, u.mono);
+  gl.uniform1fv(U.uBS, u.bs); gl.uniform1fv(U.uBH, u.bh);
+  gl.uniform3fv(U.uShT, u.shT); gl.uniform3fv(U.uHiT, u.hiT); gl.uniform3fv(U.uMonoW, u.monoW); gl.uniform3fv(U.uMonoTone, u.monoTone);
+}
+function drawTo(fb, w, h, u, view, split){
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.viewport(0, 0, w, h);
+  setUniforms(u, {w, h, screen: fb === null}, view, split);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+function makeFBO(w, h){
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  const fb = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  gl.bindTexture(gl.TEXTURE_2D, img ? img.tex : null);
+  return {fb, tex, w, h};
+}
+function readFlipped(w, h){
+  const raw = new Uint8Array(w * h * 4);
+  gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, raw);
+  const px = new Uint8ClampedArray(raw.buffer);
+  const row = w * 4, tmp = new Uint8ClampedArray(row);
+  for (let y = 0; y < (h >> 1); y++) {
+    const a = y * row, b = (h - 1 - y) * row;
+    tmp.set(px.subarray(a, a + row)); px.copyWithin(a, b, b + row); px.set(tmp, b);
+  }
+  return px;
+}
+
+/* ---------------- View / interaction ---------------- */
+const stage = $("#stage");
+let view = {scale:1, ox:0, oy:0, fit:true};
+let compare = false, splitFrac = .5, holdOrig = false;
+function dpr(){ return Math.min(window.devicePixelRatio || 1, 2); }
+function resize(){
+  const r = dpr();
+  canvas.width = Math.max(1, Math.round(stage.clientWidth * r));
+  canvas.height = Math.max(1, Math.round(stage.clientHeight * r));
+  if (view.fit) fitView(); else clampView();
+  requestRender();
+}
+function fitView(){
+  if (!img) return;
+  const pad = 16 * dpr();
+  const s = Math.min((canvas.width - pad*2) / img.W, (canvas.height - pad*2) / img.H);
+  view.scale = s; view.ox = (canvas.width - img.W * s) / 2; view.oy = (canvas.height - img.H * s) / 2; view.fit = true;
+  updateZoomUI();
+}
+function clampView(){
+  if (!img) return;
+  const w = img.W * view.scale, h = img.H * view.scale, cw = canvas.width, ch = canvas.height;
+  view.ox = w <= cw ? (cw - w) / 2 : clamp(view.ox, cw - w, 0);
+  view.oy = h <= ch ? (ch - h) / 2 : clamp(view.oy, ch - h, 0);
+}
+function zoomAt(ns, px, py){
+  if (!img) return;
+  const fitS = Math.min(canvas.width / img.W, canvas.height / img.H);
+  ns = clamp(ns, Math.min(fitS * .5, 1), 8);
+  const ix = (px - view.ox) / view.scale, iy = (py - view.oy) / view.scale;
+  view.scale = ns; view.ox = px - ix * ns; view.oy = py - iy * ns; view.fit = false;
+  clampView(); updateZoomUI(); requestRender();
+}
+function updateZoomUI(){
+  $("#oneBtn").textContent = view.fit ? "100%" : Math.round(view.scale * 100) + "%";
+  $("#fitBtn").classList.toggle("on", view.fit);
+}
+const pointers = new Map();
+let pinch = null;
+canvas.addEventListener("pointerdown", e => {
+  if (!img) return;
+  canvas.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, {x: e.offsetX * dpr(), y: e.offsetY * dpr()});
+  canvas.classList.add("dragging");
+  if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    pinch = {d: Math.hypot(a.x-b.x, a.y-b.y), s: view.scale};
+  }
+});
+canvas.addEventListener("pointermove", e => {
+  const p = pointers.get(e.pointerId); if (!p) return;
+  const nx = e.offsetX * dpr(), ny = e.offsetY * dpr();
+  if (pointers.size === 1) {
+    view.ox += nx - p.x; view.oy += ny - p.y; view.fit = false; clampView(); updateZoomUI(); requestRender();
+  }
+  p.x = nx; p.y = ny;
+  if (pointers.size === 2 && pinch) {
+    const [a, b] = [...pointers.values()];
+    zoomAt(pinch.s * Math.hypot(a.x-b.x, a.y-b.y) / pinch.d, (a.x+b.x)/2, (a.y+b.y)/2);
+  }
+});
+const endPtr = e => { pointers.delete(e.pointerId); if (pointers.size < 2) pinch = null; if (!pointers.size) canvas.classList.remove("dragging"); };
+canvas.addEventListener("pointerup", endPtr); canvas.addEventListener("pointercancel", endPtr);
+canvas.addEventListener("wheel", e => { if (!img) return; e.preventDefault(); zoomAt(view.scale * Math.exp(-e.deltaY * .0015), e.offsetX * dpr(), e.offsetY * dpr()); }, {passive:false});
+canvas.addEventListener("dblclick", e => { if (!img) return; if (view.fit) zoomAt(1, e.offsetX * dpr(), e.offsetY * dpr()); else { fitView(); requestRender(); } });
+$("#fitBtn").onclick = () => { fitView(); requestRender(); };
+$("#oneBtn").onclick = () => zoomAt(1, canvas.width / 2, canvas.height / 2);
+$("#cmpBtn").onclick = () => { compare = !compare; $("#cmpBtn").classList.toggle("on", compare); $("#split").classList.toggle("hidden", !compare); $("#swapBtn").classList.toggle("hidden", !compare); placeSplit(); requestRender(); };
+let swapSides = false;
+try { swapSides = localStorage.getItem("sony-look-sim-swap") === "1"; } catch(e) {}
+function applySwap(){
+  $("#labL").textContent = swapSides ? "效果" : "原图";
+  $("#labR").textContent = swapSides ? "原图" : "效果";
+  $("#swapBtn").classList.toggle("on", swapSides);
+  try { localStorage.setItem("sony-look-sim-swap", swapSides ? "1" : "0"); } catch(e) {}
+  if (gl && img) requestRender();
+}
+$("#swapBtn").onclick = () => { swapSides = !swapSides; applySwap(); };
+queueMicrotask(applySwap);
+document.addEventListener("keydown", e => { if (compare && (e.key === "s" || e.key === "S") && !e.target.matches("input, textarea")) { swapSides = !swapSides; applySwap(); } });
+function placeSplit(){ $("#split").style.left = (splitFrac * 100) + "%"; }
+const grip = $("#grip");
+grip.addEventListener("pointerdown", e => { e.stopPropagation(); grip.setPointerCapture(e.pointerId); grip._drag = true; });
+grip.addEventListener("pointermove", e => { if (!grip._drag) return; const r = stage.getBoundingClientRect(); splitFrac = clamp((e.clientX - r.left) / r.width, .02, .98); placeSplit(); requestRender(); });
+grip.addEventListener("pointerup", () => grip._drag = false);
+grip.addEventListener("keydown", e => { if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); e.stopPropagation(); splitFrac = clamp(splitFrac + (e.key === "ArrowLeft" ? -.02 : .02), .02, .98); placeSplit(); requestRender(); } });
+const holdBtn = $("#holdBtn");
+const setHold = v => { holdOrig = v; holdBtn.classList.toggle("on", v); requestRender(); };
+holdBtn.addEventListener("pointerdown", e => { holdBtn.setPointerCapture(e.pointerId); setHold(true); });
+["pointerup","pointercancel","lostpointercapture"].forEach(t => holdBtn.addEventListener(t, () => setHold(false)));
+
+/* ---------------- Rendering ---------------- */
+let dirty = false;
+function requestRender(){ if (!dirty) { dirty = true; requestAnimationFrame(frame); } }
+function frame(){
+  dirty = false;
+  if (!img) { gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0,0,canvas.width,canvas.height); gl.clearColor(bg[0],bg[1],bg[2],1); gl.clear(gl.COLOR_BUFFER_BIT); return; }
+  const look = curLook();
+  const u = uniformsFor(state.mode, look, paramsFor(state.mode, look.id));
+  const split = holdOrig ? 1e9 : compare ? splitFrac * canvas.width : -1;
+  drawTo(null, canvas.width, canvas.height, u, view, split);
+  scheduleHist();
+}
+
+let histFBO = null, histT = 0;
+function scheduleHist(){ if (img && img.live) return; clearTimeout(histT); histT = setTimeout(drawHist, 90); }
+function drawHist(){
+  if (!img) return;
+  const w = 256, h = Math.max(1, Math.round(256 * img.H / img.W));
+  if (!histFBO || histFBO.h !== h) histFBO = makeFBO(w, h);
+  const look = curLook();
+  drawTo(histFBO.fb, w, h, uniformsFor(state.mode, look, paramsFor(state.mode, look.id)), {scale: w / img.W, ox:0, oy:0}, -1);
+  const px = new Uint8Array(w * h * 4);
+  gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  const B = 96, bins = [new Float32Array(B), new Float32Array(B), new Float32Array(B)];
+  for (let i = 0; i < px.length; i += 4) for (let c = 0; c < 3; c++) bins[c][Math.min(B - 1, (px[i + c] * B) >> 8)]++;
+  let mx = 1; bins.forEach(b => { for (let i = 1; i < B - 1; i++) mx = Math.max(mx, b[i]); });
+  const hc = $("#hist"), x = hc.getContext("2d"), W = hc.width, H = hc.height;
+  x.clearRect(0, 0, W, H);
+  x.globalCompositeOperation = "lighter";
+  const cols = ["rgba(255,70,60,.75)", "rgba(80,220,90,.7)", "rgba(70,130,255,.8)"];
+  bins.forEach((b, c) => {
+    x.fillStyle = cols[c]; x.beginPath(); x.moveTo(0, H);
+    for (let i = 0; i < B; i++) x.lineTo(i / (B - 1) * W, H - Math.min(1, b[i] / mx) * (H - 4));
+    x.lineTo(W, H); x.closePath(); x.fill();
+  });
+  x.globalCompositeOperation = "source-over";
+  x.strokeStyle = "rgba(255,255,255,.18)"; x.lineWidth = 1;
+  for (let i = 1; i < 4; i++) { x.beginPath(); x.moveTo(i * W / 4, 0); x.lineTo(i * W / 4, H); x.stroke(); }
+}
+
+function estimateAWB(){
+  const w = 160, h = Math.max(1, Math.round(160 * img.H / img.W));
+  const f = makeFBO(w, h);
+  const look = curLook();
+  drawTo(f.fb, w, h, uniformsFor(state.mode, look, paramsFor(state.mode, look.id)), {scale: w / img.W, ox:0, oy:0}, 1e9);
+  const px = new Uint8Array(w * h * 4);
+  gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.deleteFramebuffer(f.fb); gl.deleteTexture(f.tex); gl.bindTexture(gl.TEXTURE_2D, img.tex);
+  const lin = v => { v /= 255; return v <= .04045 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4); };
+  let r = 0, g = 0, b = 0, n = 0;
+  for (let i = 0; i < px.length; i += 4) {
+    const R = lin(px[i]), G = lin(px[i+1]), B = lin(px[i+2]);
+    const mx = Math.max(R, G, B), mn = Math.min(R, G, B), l = .2126*R + .7152*G + .0722*B;
+    if (l < .02 || mx > .96) continue;
+    const wgt = 1 / (1 + 6 * (mx - mn) / (mx + 1e-4)); // favour near-neutral pixels
+    r += R * wgt; g += G * wgt; b += B * wgt; n += wgt;
+  }
+  if (!n || !r || !b) return [1, 1, 1];
+  return [clamp(g / r, .4, 2.5), 1, clamp(g / b, .4, 2.5)];
+}
+
+let thumbFBO = null, thumbT = 0;
+function scheduleThumbs(){ if (img && img.live) return; clearTimeout(thumbT); thumbT = setTimeout(drawThumbs, 180); }
+function drawThumbs(){
+  if (!img) return;
+  const w = 192, h = 128;
+  if (!thumbFBO) thumbFBO = makeFBO(w, h);
+  const s = Math.max(w / img.W, h / img.H);
+  const v = {scale: s, ox: (w - img.W * s) / 2, oy: (h - img.H * s) / 2};
+  for (const look of LOOKS[state.mode]) {
+    const c = document.querySelector(`.tile[data-id="${CSS.escape(look.id)}"] canvas`);
+    if (!c) continue;
+    drawTo(thumbFBO.fb, w, h, uniformsFor(state.mode, look, paramsFor(state.mode, look.id)), v, -1);
+    c.getContext("2d").putImageData(new ImageData(readFlipped(w, h), w, h), 0, 0);
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
+
+/* ---------------- Loading ---------------- */
+const busy = $("#busy");
+function toast(msg){ const t = $("#toast"); t.textContent = msg; t.classList.add("on"); clearTimeout(t._t); t._t = setTimeout(() => t.classList.remove("on"), 3200); }
+
+async function loadFile(file){
+  busy.textContent = "正在解析 " + file.name + "…"; busy.classList.add("on");
+  try {
+    let blob = file, orient = 1, meta = {}, kind = "图片", decodeOpts = undefined;
+    const isRaw = RAW_EXT.test(file.name) || (!file.type && !/\.(jpe?g|png|webp|gif|avif|bmp)$/i.test(file.name));
+    if (isRaw || /tiff/.test(file.type)) {
+      const u8 = new Uint8Array(await file.arrayBuffer());
+      const pv = extractPreview(u8);
+      if (!pv) throw new Error("这个文件里没有找到浏览器能解码的嵌入预览。可以换一张 RAW，或者上传 JPEG/PNG。");
+      blob = pv.blob; meta = pv.meta; kind = "嵌入预览";
+      if (!(pv.jpegOri && pv.jpegOri !== 1)) { orient = meta.orientation || 1; decodeOpts = {imageOrientation: "none"}; }
+    } else if (/jpe?g/i.test(file.type) || /\.jpe?g$/i.test(file.name)) {
+      const u8 = new Uint8Array(await file.arrayBuffer());
+      const info = jpegInfo(u8, 0);
+      if (info && info.exif > 0) { const e = parseTiff(u8, info.exif); if (e) meta = e.meta; }
+    }
+    let bmp;
+    try { bmp = await createImageBitmap(blob, decodeOpts); }
+    catch(e) {
+      if (decodeOpts) { bmp = await createImageBitmap(blob); orient = 1; }
+      else throw new Error("浏览器无法解码这个文件（" + (file.type || "未知格式") + "）。");
+    }
+    await setImage(bmp, {orient, meta, kind, name: file.name});
+  } catch (err) {
+    console.error(err);
+    toast(err.message || "文件读取失败");
+  } finally { busy.classList.remove("on"); }
+}
+
+async function setImage(bmp, info){
+  if (cam) stopCamera(false);
+  const maxT = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+  const cap = Math.min(maxT, /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent) ? 4096 : 8192);
+  const srcW = bmp.width, srcH = bmp.height;
+  if (Math.max(srcW, srcH) > cap) {
+    const k = cap / Math.max(srcW, srcH);
+    const b2 = await createImageBitmap(bmp, {resizeWidth: Math.round(srcW * k), resizeHeight: Math.round(srcH * k), resizeQuality: "high"});
+    bmp.close && bmp.close(); bmp = b2;
+  }
+  if (img && img.tex) gl.deleteTexture(img.tex);
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bmp);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  const tw = bmp.width, th = bmp.height;
+  bmp.close && bmp.close();
+  const o = info.orient >= 1 && info.orient <= 8 ? info.orient : 1;
+  const swap = o >= 5;
+  img = {tex, tw, th, W: swap ? th : tw, H: swap ? tw : th, orient: o, meta: info.meta || {}, kind: info.kind, name: info.name, srcW: swap ? srcH : srcW, srcH: swap ? srcW : srcH};
+  histFBO = null;
+  img.awb = estimateAWB();
+  $("#empty").classList.add("hidden");
+  ["#badge","#histo","#bar"].forEach(s => $(s).classList.remove("hidden"));
+  $("#exportBtn").disabled = false;
+  renderMeta();
+  fitView(); requestRender(); scheduleThumbs();
+}
+
+/* ---------------- Live camera ---------------- */
+let cam = null; // {stream, video, deviceId, devices, handle, lastHist, lastThumb, lastAWB}
+const video = document.createElement("video");
+video.muted = true; video.playsInline = true; video.setAttribute("playsinline", "");
+function camError(e){
+  const n = e && e.name;
+  if (n === "NotAllowedError" || n === "SecurityError") return "无法使用摄像头：权限被拒绝，或当前页面环境不允许访问摄像头。请在浏览器地址栏的权限设置里允许摄像头后重试。";
+  if (n === "NotFoundError" || n === "OverconstrainedError") return "没有找到可用的摄像头。";
+  if (n === "NotReadableError") return "摄像头正被其他程序占用。";
+  return "摄像头启动失败：" + (e && e.message || n || "未知错误");
+}
+async function startCamera(deviceId){
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { toast("当前环境不支持摄像头（需要 HTTPS 与新版浏览器）。"); return; }
+  busy.textContent = "正在打开摄像头…"; busy.classList.add("on");
+  try {
+    const constraints = {audio: false, video: deviceId ? {deviceId: {exact: deviceId}, width: {ideal: 1920}, height: {ideal: 1080}}
+                                                     : {facingMode: "environment", width: {ideal: 1920}, height: {ideal: 1080}}};
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    if (cam) stopTracks();
+    video.srcObject = stream;
+    await video.play();
+    const track = stream.getVideoTracks()[0], st = track.getSettings ? track.getSettings() : {};
+    let devices = [];
+    try { devices = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput"); } catch(e) {}
+    const front = st.facingMode === "user" || (!st.facingMode && /front|facetime|前置|integrated|webcam/i.test(track.label));
+    if (img && img.tex) gl.deleteTexture(img.tex);
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    cam = {stream, deviceId: st.deviceId || deviceId, devices, label: track.label || "摄像头", lastHist: 0, lastThumb: 0, lastAWB: 0, handle: 0};
+    img = {tex, tw: 0, th: 0, W: 1, H: 1, orient: front ? 2 : 1, meta: {}, kind: "实时", name: "camera", srcW: 0, srcH: 0, live: true, awb: [1,1,1]};
+    histFBO = null;
+    uploadFrame(true);
+    $("#empty").classList.add("hidden");
+    ["#badge","#histo","#bar","#mirrorBtn"].forEach(s => $(s).classList.remove("hidden"));
+    $("#flipCamBtn").classList.toggle("hidden", devices.length < 2);
+    $("#mirrorBtn").classList.toggle("on", img.orient === 2);
+    $("#exportBtn").disabled = false; $("#exportBtn").textContent = "拍照导出";
+    $("#camBtn").classList.add("live"); $("#camBtn").textContent = "停止";
+    pump();
+  } catch (e) { console.error(e); toast(camError(e)); }
+  finally { busy.classList.remove("on"); }
+}
+function uploadFrame(force){
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh || !img || !img.live) return;
+  gl.bindTexture(gl.TEXTURE_2D, img.tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  if (force || vw !== img.tw || vh !== img.th) {
+    img.tw = img.srcW = img.W = vw; img.th = img.srcH = img.H = vh; histFBO = null;
+    renderMeta(); fitView();
+  }
+  const now = performance.now();
+  if (now - cam.lastAWB > 1000 && state.wbMode === "auto") { cam.lastAWB = now; img.awb = estimateAWB(); }
+  if (now - cam.lastHist > 150) { cam.lastHist = now; requestAnimationFrame(drawHist); }
+  if (now - cam.lastThumb > 600) { cam.lastThumb = now; requestAnimationFrame(drawThumbs); }
+  requestRender();
+}
+function pump(){
+  if (!cam) return;
+  uploadFrame(false);
+  cam.handle = video.requestVideoFrameCallback ? video.requestVideoFrameCallback(pump) : requestAnimationFrame(pump);
+}
+function stopTracks(){
+  if (!cam) return;
+  cam.stream.getTracks().forEach(t => t.stop());
+  try { if (video.requestVideoFrameCallback) video.cancelVideoFrameCallback(cam.handle); else cancelAnimationFrame(cam.handle); } catch(e) {}
+}
+function stopCamera(keepFrame){
+  if (!cam) return;
+  stopTracks(); cam = null; video.srcObject = null;
+  $("#camBtn").classList.remove("live"); $("#camBtn").textContent = "摄像头";
+  $("#exportBtn").textContent = "导出 JPEG";
+  $("#mirrorBtn").classList.add("hidden"); $("#flipCamBtn").classList.add("hidden");
+  if (img && img.live) {
+    img.live = false;
+    if (keepFrame) { img.kind = "摄像头截帧"; img.name = "camera_" + new Date().toISOString().slice(0,19).replace(/[-:T]/g, ""); img.awb = estimateAWB(); renderMeta(); scheduleThumbs(); requestRender(); }
+  }
+}
+$("#camBtn").onclick = () => cam ? stopCamera(true) : startCamera();
+$("#camBtn2").onclick = () => startCamera();
+$("#mirrorBtn").onclick = () => { if (!img) return; img.orient = img.orient === 2 ? 1 : 2; $("#mirrorBtn").classList.toggle("on", img.orient === 2); requestRender(); };
+$("#flipCamBtn").onclick = () => {
+  if (!cam || cam.devices.length < 2) return;
+  const i = cam.devices.findIndex(d => d.deviceId === cam.deviceId);
+  startCamera(cam.devices[(i + 1) % cam.devices.length].deviceId);
+};
+document.addEventListener("visibilitychange", () => { if (document.hidden && cam) stopCamera(true); });
+
+function fmtExp(t){ if (!t) return ""; if (t >= 1) return (Math.round(t * 10) / 10) + "″"; return "1/" + Math.round(1 / t); }
+function renderMeta(){
+  const m = img.meta, el = $("#meta");
+  el.textContent = "";
+  const add = (txt, cls) => { if (!txt) return; const s = document.createElement("span"); s.textContent = txt; if (cls) s.className = cls; el.appendChild(s); };
+  if (img.live) { const r = document.createElement("span"); r.className = "rec"; r.textContent = "● 实时"; el.appendChild(r); add(cam && cam.label, "opt"); add(img.srcW + "×" + img.srcH, "dim"); return; }
+  add(img.name, "opt dim");
+  add([m.make && !(m.model || "").toUpperCase().startsWith((m.make || "").toUpperCase().split(" ")[0]) ? m.make : "", m.model].filter(Boolean).join(" "));
+  add(fmtExp(m.exposure));
+  add(m.fnumber ? "F" + (Math.round(m.fnumber * 10) / 10) : "");
+  add(m.iso ? "ISO " + m.iso : "");
+  add(m.focal ? Math.round(m.focal) + "mm" : "");
+  add(img.kind + " " + img.srcW + "×" + img.srcH, "opt dim");
+}
+
+/* ---------------- Demo chart ---------------- */
+function demoChart(){
+  const W = 1800, H = 1200, c = document.createElement("canvas"); c.width = W; c.height = H;
+  const x = c.getContext("2d");
+  const sky = x.createLinearGradient(0, 0, 0, H * .55);
+  sky.addColorStop(0, "#5b86b8"); sky.addColorStop(.7, "#b9cfe0"); sky.addColorStop(1, "#e8d9c4");
+  x.fillStyle = sky; x.fillRect(0, 0, W, H * .55);
+  x.fillStyle = "#6d7f4a"; x.beginPath(); x.moveTo(0, H*.5);
+  for (let i = 0; i <= 18; i++) x.lineTo(i * W / 18, H * (.46 + .05 * Math.sin(i * 1.3) + .03 * Math.cos(i * 2.7)));
+  x.lineTo(W, H*.58); x.lineTo(0, H*.58); x.fill();
+  const ground = x.createLinearGradient(0, H*.55, 0, H);
+  ground.addColorStop(0, "#8a7a5c"); ground.addColorStop(1, "#3b3228");
+  x.fillStyle = ground; x.fillRect(0, H*.55, W, H*.45);
+  // sun
+  const sun = x.createRadialGradient(W*.8, H*.2, 10, W*.8, H*.2, 220);
+  sun.addColorStop(0, "rgba(255,248,230,1)"); sun.addColorStop(.25, "rgba(255,230,190,.8)"); sun.addColorStop(1, "rgba(255,220,180,0)");
+  x.fillStyle = sun; x.fillRect(0, 0, W, H*.55);
+  // ColorChecker (sRGB approximations)
+  const cc = ["#735244","#c29682","#627a9d","#576c43","#8580b1","#67bdaa","#d67e2c","#505ba6","#c15a63","#5e3c6c","#9dbc40","#e0a32e","#383d96","#469449","#af363c","#e7c71f","#bb5695","#0885a1","#f3f3f2","#c8c8c8","#a0a0a0","#7a7a79","#555555","#343434"];
+  const cw = 150, gap = 14, ox = 80, oy = 560;
+  x.fillStyle = "#1a1a1a"; x.fillRect(ox - 24, oy - 24, 6 * cw + 5 * gap + 48, 4 * cw + 3 * gap + 48);
+  cc.forEach((col, i) => { x.fillStyle = col; x.fillRect(ox + (i % 6) * (cw + gap), oy + Math.floor(i / 6) * (cw + gap), cw, cw); });
+  // hue × lightness field
+  const fx = 1130, fy = 560, fw = 610, fh = 360;
+  for (let j = 0; j < fh; j += 4) for (let i = 0; i < fw; i += 4) {
+    const hue = i / fw * 360, lt = 88 - j / fh * 70;
+    x.fillStyle = `hsl(${hue} 75% ${lt}%)`; x.fillRect(fx + i, fy + j, 4, 4);
+  }
+  // gray ramp
+  const g = x.createLinearGradient(fx, 0, fx + fw, 0);
+  g.addColorStop(0, "#000"); g.addColorStop(1, "#fff");
+  x.fillStyle = g; x.fillRect(fx, fy + fh + 30, fw, 80);
+  // fine detail for sharpness
+  x.strokeStyle = "#f4f1ea"; x.lineWidth = 1.5;
+  for (let i = 0; i < 40; i++) { x.beginPath(); x.moveTo(80 + i * 8, 90); x.lineTo(80 + i * 8, 330); x.stroke(); }
+  x.font = "600 64px Barlow, sans-serif"; x.fillStyle = "#1c1e21"; x.fillText("Creative Look 测试卡", 460, 200);
+  return createImageBitmap(c);
+}
+
+/* ---------------- Panel UI ---------------- */
+const tilesEl = $("#tiles"), rowsEl = $("#rows");
+function buildTiles(){
+  tilesEl.textContent = "";
+  for (const look of LOOKS[state.mode]) {
+    const b = document.createElement("button");
+    b.className = "tile"; b.dataset.id = look.id;
+    b.setAttribute("aria-pressed", look.id === curLook().id);
+    b.innerHTML = `<div class="th"><canvas width="192" height="128"></canvas><span class="code"></span></div><span class="nm"></span>`;
+    b.querySelector(".code").textContent = look.code;
+    b.querySelector(".nm").textContent = look.name;
+    b.onclick = () => selectLook(look.id);
+    tilesEl.appendChild(b);
+  }
+  scheduleThumbs();
+}
+function selectLook(id){
+  state.sel[state.mode] = id; persist();
+  tilesEl.querySelectorAll(".tile").forEach(t => t.setAttribute("aria-pressed", t.dataset.id === id));
+  buildRows(); updateBadge(); requestRender();
+}
+function updateBadge(){
+  const l = curLook();
+  $("#bCode").textContent = l.code; $("#bName").textContent = l.name; $("#bWB").textContent = "WB " + wbLabel();
+  $("#pTitle").innerHTML = ""; $("#pTitle").append((state.mode === "look" ? "外观参数" : "风格参数"));
+  const sm = document.createElement("small"); sm.textContent = l.code + " " + l.name; $("#pTitle").append(sm);
+}
+function makeRow(def, get, set, fmt){
+  const r = document.createElement("div"); r.className = "prow";
+  const id = "p_" + Math.random().toString(36).slice(2, 8);
+  r.innerHTML = `<label for="${id}"></label><button class="step" aria-label="减少">−</button><input type="range" id="${id}"><button class="step" aria-label="增加">+</button><span class="val" title="双击归零"></span>`;
+  r.querySelector("label").textContent = def.n;
+  const [minus, plus] = r.querySelectorAll(".step"), rng = r.querySelector("input"), val = r.querySelector(".val");
+  rng.min = def.min; rng.max = def.max; rng.step = 1;
+  const paint = () => { const v = get(); rng.value = v; val.textContent = fmt ? fmt(v) : (def.plain ? String(v) : (v > 0 ? "+" + v : String(v))); val.classList.toggle("nz", v !== def.d); };
+  const upd = v => { v = clamp(Math.round(v), def.min, def.max); if (v === get()) return; set(v); paint(); persist(); requestRender(); scheduleThumbs(); };
+  rng.oninput = () => upd(+rng.value);
+  minus.onclick = () => upd(get() - 1); plus.onclick = () => upd(get() + 1);
+  val.ondblclick = () => upd(def.d);
+  paint();
+  return r;
+}
+function buildRows(){
+  rowsEl.textContent = "";
+  const look = curLook(), p = paramsFor(state.mode, look.id);
+  for (const def of PARAMS[state.mode]) {
+    const r = makeRow(def, () => p[def.k], v => p[def.k] = v);
+    if (def.color && look.mono) r.classList.add("off");
+    rowsEl.appendChild(r);
+  }
+}
+function buildCommon(){
+  const ev = $("#evRow"); ev.textContent = "";
+  ev.appendChild(makeRow({n:"曝光补偿", min:-9, max:9, d:0}, () => state.ev3, v => state.ev3 = v,
+    v => (v > 0 ? "+" : v < 0 ? "−" : "±") + Math.abs(v / 3).toFixed(1)));
+  const kr = $("#kRow"); kr.textContent = ""; $("#wbModes").textContent = "";
+  buildWBModes();
+  drawWB();
+}
+function setMode(m){
+  state.mode = m; persist();
+  $("#mLook").setAttribute("aria-pressed", m === "look"); $("#mStyle").setAttribute("aria-pressed", m === "style");
+  buildTiles(); buildRows(); updateBadge(); requestRender();
+}
+$("#mLook").onclick = () => setMode("look");
+$("#mStyle").onclick = () => setMode("style");
+$("#resetLook").onclick = () => { delete state.params[state.mode + ":" + curLook().id]; persist(); buildRows(); requestRender(); scheduleThumbs(); };
+$("#resetEV").onclick = () => { state.ev3 = 0; persist(); buildCommon(); requestRender(); scheduleThumbs(); };
+$("#resetCommon").onclick = () => { state.wb = {ab:0, gm:0}; state.wbMode = "asshot"; state.wbK = 5500; state.awbPri = "std"; persist(); buildCommon(); requestRender(); scheduleThumbs(); };
+function wbChanged(){ persist(); buildWBModes(); drawWB(); requestRender(); scheduleThumbs(); }
+function buildWBModes(){
+  const box = $("#wbModes");
+  if (!box.children.length) {
+    for (const m of WB_MODES) {
+      const b = document.createElement("button"); b.className = "chip"; b.dataset.id = m.id; b.textContent = m.n; b.title = m.k ? m.n + " 约 " + m.k + "K" : m.n;
+      b.onclick = () => { state.wbMode = m.id; wbChanged(); };
+      box.appendChild(b);
+    }
+    const kr = $("#kRow");
+    const row = makeRow({n:"色温", min:25, max:99, d:55, plain:true}, () => Math.round(state.wbK / 100), v => { state.wbK = v * 100; drawWB(); }, v => v * 100 + "K");
+    row.style.gridTemplateColumns = "70px 26px minmax(0,1fr) 26px 54px";
+    kr.appendChild(row);
+    $("#awbRow").querySelectorAll("button").forEach(b => b.onclick = () => { state.awbPri = b.dataset.p; wbChanged(); });
+  }
+  box.querySelectorAll(".chip").forEach(b => b.setAttribute("aria-pressed", b.dataset.id === state.wbMode));
+  $("#kRow").classList.toggle("hidden", state.wbMode !== "kelvin");
+  $("#awbRow").classList.toggle("hidden", state.wbMode !== "auto");
+  $("#awbRow").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b.dataset.p === state.awbPri));
+}
+
+// White balance shift grid
+const wbc = $("#wb");
+function drawWB(){
+  const x = wbc.getContext("2d"), S = wbc.width, n = 29, cs = S / n;
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+    const ab = (i - 14) / 14, gm = (j - 14) / 14;
+    const r = 128 + ab * 70 + gm * 50, g = 128 - gm * 60 + ab * 12, b = 128 - ab * 70 + gm * 40;
+    x.fillStyle = `rgb(${r|0},${g|0},${b|0})`; x.fillRect(i * cs, j * cs, cs + .5, cs + .5);
+  }
+  x.strokeStyle = "rgba(255,255,255,.35)"; x.lineWidth = 2;
+  x.beginPath(); x.moveTo(S/2, 0); x.lineTo(S/2, S); x.moveTo(0, S/2); x.lineTo(S, S/2); x.stroke();
+  x.font = "600 26px 'Barlow Semi Condensed', sans-serif"; x.fillStyle = "rgba(255,255,255,.9)"; x.textAlign = "center"; x.textBaseline = "middle";
+  x.fillText("G", S/2, 18); x.fillText("M", S/2, S - 16); x.fillText("B", 16, S/2); x.fillText("A", S - 16, S/2);
+  const cx = (state.wb.ab * 2 + 14.5) * cs, cy = (state.wb.gm * 2 + 14.5) * cs;
+  const ms = cs * 1.7;
+  x.lineWidth = 5; x.strokeStyle = "#1c1e21"; x.strokeRect(cx - ms/2, cy - ms/2, ms, ms);
+  x.lineWidth = 3; x.strokeStyle = "#ff8f1f"; x.strokeRect(cx - ms/2, cy - ms/2, ms, ms);
+  x.fillStyle = "#ff8f1f"; x.fillRect(cx - cs/2 + 2, cy - cs/2 + 2, cs - 4, cs - 4);
+  const {ab, gm} = state.wb;
+  const t = fmtShift(ab, gm, "  ");
+  $("#wbRd").textContent = t || "0";
+  $("#bWB").textContent = "WB " + wbLabel();
+}
+function setWB(ab, gm){
+  const q = v => clamp(Math.round(v * 2) / 2, -7, 7); ab = q(ab); gm = q(gm);
+  if (ab === state.wb.ab && gm === state.wb.gm) return;
+  state.wb = {ab, gm}; persist(); drawWB(); requestRender(); scheduleThumbs();
+}
+function wbFromEvent(e){ const r = wbc.getBoundingClientRect(); setWB((Math.floor((e.clientX - r.left) / r.width * 29) - 14) / 2, (Math.floor((e.clientY - r.top) / r.height * 29) - 14) / 2); }
+wbc.addEventListener("pointerdown", e => { wbc.setPointerCapture(e.pointerId); wbc._d = true; wbFromEvent(e); });
+wbc.addEventListener("pointermove", e => { if (wbc._d) wbFromEvent(e); });
+wbc.addEventListener("pointerup", () => wbc._d = false);
+wbc.addEventListener("dblclick", () => setWB(0, 0));
+wbc.addEventListener("keydown", e => {
+  const d = {ArrowLeft:[-1,0], ArrowRight:[1,0], ArrowUp:[0,-1], ArrowDown:[0,1]}[e.key];
+  if (d) { e.preventDefault(); e.stopPropagation(); setWB(state.wb.ab + d[0] * .5, state.wb.gm + d[1] * .5); }
+});
+
+// Keyboard: ←/→ switch looks, "\" hold original
+document.addEventListener("keydown", e => {
+  if (e.target.matches("input, textarea")) return;
+  if (e.key === "\\" && !e.repeat) { setHold(true); return; }
+  if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+    if (e.target.matches("input[type=range]")) return;
+    const list = LOOKS[state.mode], i = list.findIndex(l => l.id === curLook().id);
+    selectLook(list[(i + (e.key === "ArrowRight" ? 1 : -1) + list.length) % list.length].id);
+    e.preventDefault();
+  }
+});
+document.addEventListener("keyup", e => { if (e.key === "\\") setHold(false); });
+
+/* ---------------- File input / drop ---------------- */
+const fileIn = $("#file");
+$("#openBtn").onclick = $("#openBtn2").onclick = () => fileIn.click();
+fileIn.onchange = () => { if (fileIn.files[0]) loadFile(fileIn.files[0]); fileIn.value = ""; };
+$("#demoBtn").onclick = async () => setImage(await demoChart(), {orient:1, meta:{}, kind:"测试卡", name:"色卡示例"});
+["dragenter","dragover"].forEach(t => stage.addEventListener(t, e => { e.preventDefault(); stage.classList.add("drag-over"); }));
+["dragleave","drop"].forEach(t => stage.addEventListener(t, e => { e.preventDefault(); stage.classList.remove("drag-over"); }));
+stage.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) loadFile(f); });
+
+/* ---------------- Export ---------------- */
+$("#exportBtn").onclick = async () => {
+  if (!img) return;
+  const btn = $("#exportBtn"); btn.disabled = true; busy.textContent = "正在渲染全尺寸…"; busy.classList.add("on");
+  await new Promise(r => setTimeout(r, 30));
+  try {
+    const iOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    const limit = iOS ? 16e6 : 120e6;
+    const s = Math.min(1, Math.sqrt(limit / (img.W * img.H)), img.srcW / img.W);
+    const scale = Math.min(s, 1);
+    const OW = Math.round(img.W * scale), OH = Math.round(img.H * scale);
+    const out = document.createElement("canvas"); out.width = OW; out.height = OH;
+    const ox = out.getContext("2d");
+    const TS = 2048, tile = makeFBO(TS, TS);
+    const look = curLook(), u = uniformsFor(state.mode, look, paramsFor(state.mode, look.id));
+    for (let ty = 0; ty < OH; ty += TS) for (let tx = 0; tx < OW; tx += TS) {
+      const w = Math.min(TS, OW - tx), h = Math.min(TS, OH - ty);
+      drawTo(tile.fb, w, h, u, {scale, ox: -tx, oy: -ty}, -1);
+      ox.putImageData(new ImageData(readFlipped(w, h), w, h), tx, ty);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.deleteFramebuffer(tile.fb); gl.deleteTexture(tile.tex);
+    gl.bindTexture(gl.TEXTURE_2D, img.tex);
+    requestRender();
+    const blob = await new Promise(r => out.toBlob(r, "image/jpeg", .95));
+    if (!blob) throw new Error("图片太大，浏览器无法编码。");
+    const fname = (img.live ? "camera_" + new Date().toISOString().slice(0,19).replace(/[-:T]/g, "") : img.name).replace(/\.[^.]+$/, "") + "_" + look.code.replace(/[^A-Za-z0-9]/g, "") + ".jpg";
+    busy.classList.remove("on");
+    let dl = null;
+    try { if (window.claude && typeof window.claude.use === "function") dl = await window.claude.use("downloads"); } catch(e) {}
+    if (dl) {
+      try { await dl.save({filename: fname, data: blob}); toast("已导出 " + fname + "（" + OW + "×" + OH + "）"); }
+      catch (e) { if (e && e.code !== "declined") toast("导出失败：" + (e.message || e.code)); }
+    } else {
+      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = fname; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      toast("已导出 " + fname + "（" + OW + "×" + OH + "）");
+    }
+  } catch (e) { console.error(e); toast(e.message || "导出失败"); }
+  finally { busy.classList.remove("on"); btn.disabled = false; }
+};
+
+/* ---------------- Theme bg ---------------- */
+function readBg(){
+  const c = getComputedStyle(stage).backgroundColor.match(/[\d.]+/g) || [40,40,40];
+  bg = [c[0] / 255, c[1] / 255, c[2] / 255]; requestRender();
+}
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", readBg);
+new MutationObserver(readBg).observe(document.documentElement, {attributes:true, attributeFilter:["data-theme"]});
+
+/* ---------------- Boot ---------------- */
+if (!gl) {
+  $("#empty .frame").innerHTML = "<h2>需要 WebGL 2</h2><p>这个浏览器不支持 WebGL 2，无法实时处理图像。请换用新版 Chrome、Edge、Firefox 或 Safari。</p>";
+  return;
+}
+try { initGL(); } catch (e) { console.error(e); toast("着色器初始化失败：" + e.message); return; }
+canvas.addEventListener("webglcontextlost", e => { e.preventDefault(); toast("显卡上下文丢失，请重新打开文件"); });
+setMode(state.mode === "style" ? "style" : "look");
+buildCommon();
+readBg();
+new ResizeObserver(resize).observe(stage);
+resize();
+})();
+</script>
+</body>
+</html>
