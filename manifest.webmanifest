@@ -1,0 +1,30 @@
+{
+  "id": "./",
+  "name": "索尼创意外观模拟器 · RAW 预览",
+  "short_name": "创意外观",
+  "description": "上传 RAW 或图片，模拟索尼相机机内的创意外观 / 创意风格，支持白平衡、分屏对比、摄像头实时预览和导出 JPEG。",
+  "lang": "zh-CN",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#1c1e21",
+  "theme_color": "#1c1e21",
+  "categories": ["photo", "utilities"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ],
+  "file_handlers": [
+    {
+      "action": "./",
+      "accept": {
+        "image/*": [".jpg", ".jpeg", ".png", ".webp", ".heic", ".avif"],
+        "image/x-raw": [".arw", ".srf", ".sr2", ".cr2", ".cr3", ".nef", ".nrw", ".dng", ".raf", ".orf", ".rw2", ".pef", ".srw", ".3fr", ".iiq", ".erf", ".kdc", ".mrw", ".x3f"]
+      },
+      "launch_type": "single-client"
+    }
+  ]
+}

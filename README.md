@@ -14,6 +14,7 @@
 | 4 | 增加 FL2、FL3 | 按官方描述与实测对比调校 |
 | 5 | 对比模式增加原图与效果左右调换 | 新增「⇄ 调换」按钮与快捷键 S |
 | 6 | 支持摄像头实时预览 | 新增摄像头模式、镜像、切换镜头、拍照导出 |
+| 7 | 增加 PWA 配置 | 可安装到桌面/主屏、离线可用、桌面端可「打开方式」直接关联 RAW |
 
 ---
 
@@ -128,6 +129,13 @@
 
 ### 3.5 持久化
 - `localStorage`（带 try/catch）：模式、各外观参数、曝光、白平衡设置、对比调换状态。
+
+### 3.6 PWA
+- `manifest.webmanifest`：应用名称、图标（含 maskable）、独立窗口显示、主题色；`file_handlers` 让已安装的应用在桌面 Chromium 中可作为 RAW / 图片的「打开方式」，页面通过 `launchQueue` 接收文件。
+- `sw.js`：安装时预缓存应用外壳（`index.html`、manifest、图标）；页面导航网络优先、离线回退缓存；Google Fonts 采用 stale-while-revalidate；其余同源静态资源缓存优先。
+- 更新 `index.html` 等外壳文件后，需同步修改 `sw.js` 中的 `VERSION` 以清理旧缓存。
+- Service Worker 仅在 `http(s)` 下注册（`localhost` 或 HTTPS），直接双击 `file://` 打开时不启用。
+- 图标源文件为 `icons/icon.svg`，PNG 由其渲染得到。
 
 ---
 
