@@ -4,6 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>索尼创意外观模拟器 · RAW 预览</title>
+<meta name="description" content="上传 RAW 或图片，模拟索尼相机机内的创意外观 / 创意风格。">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="icon" href="icons/icon-192.png" type="image/png" sizes="192x192">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="theme-color" content="#f3f4f5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#26292d" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="创意外观">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Semi+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
@@ -1220,6 +1231,8 @@ $("#demoBtn").onclick = async () => setImage(await demoChart(), {orient:1, meta:
 ["dragenter","dragover"].forEach(t => stage.addEventListener(t, e => { e.preventDefault(); stage.classList.add("drag-over"); }));
 ["dragleave","drop"].forEach(t => stage.addEventListener(t, e => { e.preventDefault(); stage.classList.remove("drag-over"); }));
 stage.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) loadFile(f); });
+// Installed PWA opened via "Open with" (manifest file_handlers).
+if ("launchQueue" in window) launchQueue.setConsumer(async p => { if (p.files && p.files.length) loadFile(await p.files[0].getFile()); });
 
 /* ---------------- Export ---------------- */
 $("#exportBtn").onclick = async () => {
@@ -1284,6 +1297,12 @@ readBg();
 new ResizeObserver(resize).observe(stage);
 resize();
 })();
+</script>
+<script>
+/* ---------------- PWA ---------------- */
+if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(e => console.warn("SW 注册失败", e)));
+}
 </script>
 </body>
 </html>
