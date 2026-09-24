@@ -1,9 +1,6 @@
 # 索尼创意外观模拟器 · RAW 预览（项目上下文）
 
 > 一个纯前端的 Web 工具：上传 RAW 或图片并预览，模拟索尼相机机内的「创意外观 / 创意风格」及参数调节，支持白平衡、分屏对比、摄像头实时预览和导出 JPEG。
->
-> - 在线页面：https://claude.ai/artifact/94XzGVsAYuMUryKyymmG92
-> - 源文件：`sony-look-lab.html`（单文件，HTML + CSS + JS + GLSL）
 
 ---
 
