@@ -885,6 +885,7 @@ void main(){ vec2 p = vec2(float((gl_VertexID<<1)&2), float(gl_VertexID&2)); gl_
 const FS = `#version 300 es
 #define SONY_PATH 0
 precision highp float;
+precision highp sampler2D;
 uniform sampler2D uTex;
 uniform vec2 uTexSize, uCanvas, uImg, uOffset;
 uniform float uScale, uSplit, uSwap, uMaxLod;
@@ -1025,116 +1026,31 @@ void main(){
   outColor = vec4(orig ? src : grade(uv, src), 1.0);
 }`;
 
-/* ---------------- Sony 创意外观：逐点色彩链烘焙成 3D LUT ----------------
+/* ---------------- Sony 创意外观：逐点色彩链在 CPU 上算成 3D LUT ----------------
    嵌入 JPEG（拍摄外观渲染）→ 反解：YCC2RGB⁻¹ → 褪色/亮度伽马⁻¹ → RGB2YCC⁻¹ → 主伽马⁻¹ → LM16⁻¹（迭代）
    → 曝光 / 白平衡 → 目标外观正向：LM16 → 主伽马 → RGB2YCC → 亮度伽马/褪色 → YCC2RGB。
-   全部是逐像素运算，所以对每个 (外观, 滑块, 曝光, 白平衡) 在 GPU 上烘焙一张 33³ 的 3D LUT（按 B 切片横排成 2D 纹理），渲染时只查表。
-   清晰度（Marble）与黑白/褐色（Effect）在主着色器里对 LUT 结果计算。 */
-const LUTN = 33, TAB_W = 1024, TAB_H = 100;
-const ROW = {sLM: 0, dLM: 18, sMGi: 36, dMG: 52, sYGi: 68, dYG: 84};
-const BAKE_FS = `#version 300 es
-precision highp float; precision highp int;
-uniform sampler2D uTab;
-uniform float uN;
-uniform vec3 uGain, uYc, uST, uDT;
-uniform vec4 uSk, uSg, uDk, uDg;
-uniform vec2 uSLF, uDLF;
-uniform float uSScale, uDScale, uSEn, uDEn;
-out vec4 outColor;
-float tb(int row, int i){ return texelFetch(uTab, ivec2(i, row), 0).r; }
-float lut(int r0, float x){
-  x = clamp(x, 0.0, 16382.999); int i = int(x); float f = x - float(i); int j = i + 1;
-  return mix(tb(r0 + i / 1024, i % 1024), tb(r0 + j / 1024, j % 1024), f);
+   全部是逐像素运算：在 CPU 上用双精度算出 33³ 个节点（反解部分每张图只算一次并缓存），以半精度浮点纹理上传，
+   按 B 切片横排成 1089×33。GPU 只查表，结果在所有设备上一致。清晰度（Marble）与黑白/褐色（Effect）在着色器里计算。 */
+const LUTN = 33;
+const HUE_BASE = [0, -512, -1024, 512, -256, 256, 768, -768];
+function sonyHue(r, g, b, sc){
+  const Y = (109 * r + 366 * g + 37 * b) / 512;
+  let c1 = r - Y, c2 = b - Y;
+  if (sc) { c1 *= 0.875; c2 *= 0.5; }
+  const a1 = Math.abs(c1), a2 = Math.abs(c2), mx = Math.max(a1, a2);
+  const t = mx > 0 ? Math.atan(Math.min(a1, a2) / mx) * 512 / Math.PI : 0;     // 八分圆 atan 表 0x10029e100 的连续形式
+  const h = Math.abs(HUE_BASE[(a1 > a2 ? 4 : 0) + (c1 < 0 ? 2 : 0) + (c2 < 0 ? 1 : 0)] + t);
+  return h > 1023.999 ? 1023.999 : h;
 }
-float hue(vec3 x, float sc){
-  float Y = (109.0*x.r + 366.0*x.g + 37.0*x.b) / 512.0;
-  float c1 = x.r - Y, c2 = x.b - Y;
-  if (sc > 0.5) { c1 *= 0.875; c2 *= 0.5; }
-  float a1 = abs(c1), a2 = abs(c2), mx = max(a1, a2);
-  float t = mx > 0.0 ? atan(min(a1, a2) / mx) * 512.0 / 3.14159265 : 0.0;   // 八分圆 atan 表 0x10029e100 的连续形式
-  int code = (a1 > a2 ? 4 : 0) + (c1 < 0.0 ? 2 : 0) + (c2 < 0.0 ? 1 : 0);
-  float base = code == 1 ? -512.0 : code == 2 ? -1024.0 : code == 3 ? 512.0 : code == 4 ? -256.0 : code == 5 ? 256.0 : code == 6 ? 768.0 : code == 7 ? -768.0 : 0.0;
-  return clamp(abs(base + t), 0.0, 1023.999);
+function sonyMat(L, h, M, Nq){                  // 色相 h 处线性插值的 M、N（行优先 3×3）
+  const i = h | 0, j = (i + 1) & 1023, f = h - i;
+  for (let k = 0; k < 9; k++) { M[k] = L.M[9*i+k] + (L.M[9*j+k] - L.M[9*i+k]) * f; Nq[k] = L.N[9*i+k] + (L.N[9*j+k] - L.N[9*i+k]) * f; }
 }
-void lm(int r0, float h, out mat3 M, out mat3 N){
-  int i = int(h), j = (i + 1) % 1024; float f = h - float(i);
-  float v[18];
-  for (int k = 0; k < 18; k++) v[k] = mix(tb(r0 + k, i), tb(r0 + k, j), f);
-  M = mat3(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8]);        // 列 = 各输出通道的行向量，x*M
-  N = mat3(v[9], v[10], v[11], v[12], v[13], v[14], v[15], v[16], v[17]);
-}
-vec3 lmFwd(vec3 x){
-  mat3 M, N; lm(${ROW.dLM}, hue(x, uDScale), M, N);
-  vec3 q = (x * x) * N / 16384.0;
-  return clamp(x * M + max(q - uDT, 0.0), 0.0, 16383.0);
-}
-vec3 lmInv(vec3 y){
-  vec3 x = y;
-  for (int it = 0; it < 4; it++) {
-    mat3 M, N; lm(${ROW.sLM}, hue(x, uSScale), M, N);
-    vec3 q = max((x * x) * N / 16384.0 - uST, 0.0);
-    x = clamp((y - q) * inverse(M), 0.0, 32767.0);
-  }
-  return x;
-}
-vec3 yccFwd(vec3 a){
-  float d1 = a.r - a.g, d2 = a.b - a.g;
-  float U = (d2 < 0.0 ? uDk.z : uDk.x) * d2 + d1, V = (d1 < 0.0 ? uDk.w : uDk.y) * d1 + d2;
-  U = clamp(U * 0.5 * (U >= 0.0 ? uDg.y : uDg.w), -8192.0, 8191.0);
-  V = clamp(V * 0.5 * (V >= 0.0 ? uDg.x : uDg.z), -8192.0, 8191.0);
-  return vec3(dot(a, uYc), U, V);
-}
-vec3 yccInv(float Y, float U, float V){
-  float Up = U / (0.5 * (U >= 0.0 ? uSg.y : uSg.w)), Vp = V / (0.5 * (V >= 0.0 ? uSg.x : uSg.z));
-  float d1 = 0.0, d2 = 0.0;
-  for (int s = 3; s >= 0; s--) {
-    bool n1 = (s & 2) != 0, n2 = (s & 1) != 0;
-    float ku = n2 ? uSk.z : uSk.x, kv = n1 ? uSk.w : uSk.y, det = 1.0 - ku * kv;
-    float a = (Up - ku * Vp) / det, b = (Vp - kv * Up) / det;
-    if (s == 3 || ((a < 0.0) == n1 && (b < 0.0) == n2)) { d1 = a; d2 = b; }
-  }
-  float G = Y - uYc.x * d1 - uYc.z * d2;
-  return vec3(G + d1, G, G + d2);
-}
-void main(){
-  float fx = floor(gl_FragCoord.x);
-  vec3 src = vec3(mod(fx, uN), floor(gl_FragCoord.y), floor(fx / uN)) / (uN - 1.0) * 16383.0;
-  // 反解拍摄外观
-  vec3 yuv = vec3(0.299*src.r + 0.587*src.g + 0.114*src.b, 0.0, 0.0);
-  yuv.y = (src.r - yuv.x) / 1.402; yuv.z = (src.b - yuv.x) / 1.772;
-  float Yg = (yuv.x - uSLF.x) / uSLF.y + uSLF.x;
-  float Y = lut(${ROW.sYGi}, Yg);
-  vec3 a = yccInv(Y, yuv.y, yuv.z);
-  a = vec3(lut(${ROW.sMGi}, a.r), lut(${ROW.sMGi}, a.g), lut(${ROW.sMGi}, a.b));
-  vec3 x = uSEn > 0.5 ? lmInv(a) : a;
-  x *= uGain;
-  // 目标外观
-  vec3 b = uDEn > 0.5 ? lmFwd(x) : clamp(x, 0.0, 16383.0);
-  b = vec3(lut(${ROW.dMG}, b.r), lut(${ROW.dMG}, b.g), lut(${ROW.dMG}, b.b));
-  vec3 c = yccFwd(b);
-  float y = clamp((lut(${ROW.dYG}, c.x) - uDLF.x) * uDLF.y + uDLF.x, 0.0, 16383.0);
-  vec3 o = vec3(y + 1.402*c.y, y - 0.7141*c.y - 0.3441*c.z, y + 1.772*c.z);
-  outColor = vec4(clamp(o / 16383.0, 0.0, 1.0), 1.0);
-}`;
-let bake = null;
-function initBake(){
-  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
-  const p = gl.createProgram();
-  gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, BAKE_FS)); gl.linkProgram(p);
-  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
-  const u = {}; const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
-  for (let i = 0; i < n; i++) { const a = gl.getActiveUniform(p, i); u[a.name] = gl.getUniformLocation(p, a.name); }
-  const tab = gl.createTexture();
-  gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, tab);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  gl.activeTexture(gl.TEXTURE0);
-  const f16 = !!gl.getExtension("EXT_color_buffer_float");
-  bake = {p, u, tab, fb: gl.createFramebuffer(), f16, cache: new Map(), looks: new Map()};
-}
+function lutLerp(T, x){ const n = T.length - 1.001; x = x < 0 ? 0 : x > n ? n : x; const i = x | 0; return T[i] + (T[i + 1] - T[i]) * (x - i); }
 /* 单调表的反函数，在 0..16383 上均匀取样 */
 function invTable(T, n){
-  const out = new Float32Array(16384);
-  let x = 0, mx = -1e9; const Tm = new Float32Array(n);
+  const out = new Float32Array(16384), Tm = new Float32Array(n);
+  let x = 0, mx = -1e9;
   for (let i = 0; i < n; i++) { mx = Math.max(mx, T[i]); Tm[i] = mx; }
   for (let y = 0; y < 16384; y++) {
     while (x < n - 1 && Tm[x + 1] < y) x++;
@@ -1143,6 +1059,84 @@ function invTable(T, n){
   }
   return out;
 }
+/* 反解拍摄外观：每个 LUT 节点（嵌入 JPEG 的 RGB）→ LM16 之前的线性相机 RGB */
+function sonyInvert(S, N){
+  const mg = invTable(S.mg, 16384), yg = invTable(S.yg.T, 32768);
+  const out = new Float64Array(N * N * N * 3), M = new Float64Array(9), Nq = new Float64Array(9);
+  const L = S.lm16, T = L ? L.T : [0, 0, 0], [k0, k1, k2, k3] = S.P.k, [g0, g1, g2, g3] = S.P.g, e0 = S.ycoef[0], e2 = S.ycoef[2];
+  let o = 0;
+  for (let z = 0; z < N; z++) for (let y = 0; y < N; y++) for (let x = 0; x < N; x++, o += 3) {
+    const R0 = x / (N - 1) * 16383, G0 = y / (N - 1) * 16383, B0 = z / (N - 1) * 16383;
+    const Yo = 0.299 * R0 + 0.587 * G0 + 0.114 * B0, U = (R0 - Yo) / 1.402, V = (B0 - Yo) / 1.772;
+    const Y = lutLerp(yg, (Yo - S.yg.L) / S.yg.F + S.yg.L);
+    const Up = U / (0.5 * (U >= 0 ? g1 : g3)), Vp = V / (0.5 * (V >= 0 ? g0 : g2));
+    let d1 = 0, d2 = 0;
+    for (let s = 3; s >= 0; s--) {
+      const n1 = (s & 2) !== 0, n2 = (s & 1) !== 0, ku = n2 ? k2 : k0, kv = n1 ? k3 : k1, det = 1 - ku * kv;
+      const a = (Up - ku * Vp) / det, b = (Vp - kv * Up) / det;
+      if (s === 3 || ((a < 0) === n1 && (b < 0) === n2)) { d1 = a; d2 = b; }
+    }
+    const G = Y - e0 * d1 - e2 * d2;
+    let r = lutLerp(mg, G + d1), g = lutLerp(mg, G), b = lutLerp(mg, G + d2);
+    if (L && L.enable) {
+      const yr = r, yv = g, yb = b;
+      for (let it = 0; it < 4; it++) {
+        sonyMat(L, sonyHue(r, g, b, L.scale), M, Nq);
+        const vr = yr - Math.max((Nq[0]*r*r + Nq[1]*g*g + Nq[2]*b*b) / 16384 - T[0], 0);
+        const vg = yv - Math.max((Nq[3]*r*r + Nq[4]*g*g + Nq[5]*b*b) / 16384 - T[1], 0);
+        const vb = yb - Math.max((Nq[6]*r*r + Nq[7]*g*g + Nq[8]*b*b) / 16384 - T[2], 0);
+        const A = M[4]*M[8] - M[5]*M[7], B = M[5]*M[6] - M[3]*M[8], C = M[3]*M[7] - M[4]*M[6];
+        const det = M[0]*A + M[1]*B + M[2]*C;
+        if (!(Math.abs(det) > 1e-9)) break;
+        const nr = (A*vr + (M[2]*M[7] - M[1]*M[8])*vg + (M[1]*M[5] - M[2]*M[4])*vb) / det;
+        const ng = (B*vr + (M[0]*M[8] - M[2]*M[6])*vg + (M[2]*M[3] - M[0]*M[5])*vb) / det;
+        const nb = (C*vr + (M[1]*M[6] - M[0]*M[7])*vg + (M[0]*M[4] - M[1]*M[3])*vb) / det;
+        r = Math.min(Math.max(nr, 0), 32767); g = Math.min(Math.max(ng, 0), 32767); b = Math.min(Math.max(nb, 0), 32767);
+      }
+    }
+    out[o] = r; out[o + 1] = g; out[o + 2] = b;
+  }
+  return out;
+}
+/* 目标外观正向，输出半精度 RGBA（宽 N·N：x = B·N + R，高 N：y = G） */
+const f16 = (() => {                           // float32 → IEEE 半精度（就近舍入，含非规格化数）
+  const f = new Float32Array(1), u = new Uint32Array(f.buffer);
+  return v => {
+    f[0] = v;
+    const x = u[0], s = (x >>> 16) & 0x8000, e = ((x >>> 23) & 0xff) - 112;
+    let m = x & 0x7fffff;
+    if (e >= 31) return s | 0x7bff;
+    if (e <= 0) { if (e < -10) return s; m = (m | 0x800000) >>> (1 - e); return s | ((m + 0x1000) >>> 13); }
+    return (s | (e << 10) | (m >>> 13)) + ((m >>> 12) & 1);
+  };
+})();
+function sonyForward(inv, D, gain, N){
+  const out = new Uint16Array(N * N * N * 4), M = new Float64Array(9), Nq = new Float64Array(9);
+  const L = D.lm16, T = L ? L.T : [0, 0, 0], [k0, k1, k2, k3] = D.P.k, [g0, g1, g2, g3] = D.P.g, [c0, c1, c2] = D.ycoef;
+  const cl = v => f16(v !== v || v < 0 ? 0 : v > 16383 ? 1 : v / 16383), one = f16(1);
+  let o = 0;
+  for (let z = 0; z < N; z++) for (let y = 0; y < N; y++) for (let x = 0; x < N; x++, o += 3) {
+    let r = inv[o] * gain[0], g = inv[o + 1] * gain[1], b = inv[o + 2] * gain[2];
+    if (L && L.enable) {
+      sonyMat(L, sonyHue(r, g, b, L.scale), M, Nq);
+      const r2 = r*r, g2 = g*g, b2 = b*b;
+      const lr = M[0]*r + M[1]*g + M[2]*b + Math.max((Nq[0]*r2 + Nq[1]*g2 + Nq[2]*b2) / 16384 - T[0], 0);
+      const lg = M[3]*r + M[4]*g + M[5]*b + Math.max((Nq[3]*r2 + Nq[4]*g2 + Nq[5]*b2) / 16384 - T[1], 0);
+      const lb = M[6]*r + M[7]*g + M[8]*b + Math.max((Nq[6]*r2 + Nq[7]*g2 + Nq[8]*b2) / 16384 - T[2], 0);
+      r = lr; g = lg; b = lb;
+    }
+    r = lutLerp(D.mg, r < 0 ? 0 : r > 16383 ? 16383 : r); g = lutLerp(D.mg, g < 0 ? 0 : g > 16383 ? 16383 : g); b = lutLerp(D.mg, b < 0 ? 0 : b > 16383 ? 16383 : b);
+    const e1 = r - g, e2 = b - g;
+    let U = (e2 < 0 ? k2 : k0) * e2 + e1, V = (e1 < 0 ? k3 : k1) * e1 + e2;
+    U = Math.min(Math.max(U * 0.5 * (U >= 0 ? g1 : g3), -8192), 8191);
+    V = Math.min(Math.max(V * 0.5 * (V >= 0 ? g0 : g2), -8192), 8191);
+    const yv = Math.min(Math.max((lutLerp(D.yg.T, r * c0 + g * c1 + b * c2) - D.yg.L) * D.yg.F + D.yg.L, 0), 16383);
+    const p = 4 * ((z * N + x) + y * N * N);
+    out[p] = cl(yv + 1.402 * U); out[p + 1] = cl(yv - 0.7141 * U - 0.3441 * V); out[p + 2] = cl(yv + 1.772 * V); out[p + 3] = one;
+  }
+  return out;
+}
+let sonyCache = null;
 function sonySource(){
   if (!img) return null;
   if (!img.sonyData) img.sonyData = img.sonyRaw || SONY.fromDefault();
@@ -1150,57 +1144,34 @@ function sonySource(){
 }
 function sonyLook(data, name, adj, asShot){
   const key = (data.isDefault ? "def" : img.uid) + "|" + name + "|" + JSON.stringify(adj) + "|" + !!asShot;
-  let L = bake.looks.get(key);
-  if (!L) { L = SONY.buildLook(data, name, adj, asShot); bake.looks.set(key, L); if (bake.looks.size > 40) bake.looks.delete(bake.looks.keys().next().value); }
+  let L = sonyCache.looks.get(key);
+  if (!L) { L = SONY.buildLook(data, name, adj, asShot); sonyCache.looks.set(key, L); if (sonyCache.looks.size > 40) sonyCache.looks.delete(sonyCache.looks.keys().next().value); }
   return L;
 }
-/* 目标外观 + 滑块 + 曝光/白平衡 → {tex: 3D LUT, 清晰度与效果参数}（带缓存） */
+/* 目标外观 + 滑块 + 曝光/白平衡 → {tex: LUT 纹理, 清晰度与效果参数}（带缓存） */
 function sonyLUT(look, p, gain){
   const data = sonySource(); if (!data) return null;
   const name = SONY.CODE2NAME[look.id]; if (!name || !data.looks[name]) return null;
-  if (!bake) initBake();
+  if (!sonyCache) sonyCache = {looks: new Map(), inv: new Map(), luts: new Map()};
+  const src = data.looks[data.asShot] ? data.asShot : "Standard", sk = (data.isDefault ? "def" : img.uid) + "|" + src;
   const adj = {contrast: p.contrast, highlights: p.highlights, shadows: p.shadows, fade: p.fade, saturation: look.mono ? 0 : p.saturation, clarity: p.clarity};
-  const S = sonyLook(data, data.looks[data.asShot] ? data.asShot : "Standard", {}, true), D = sonyLook(data, name, adj, false);
-  const key = S.name + "|" + (data.isDefault ? "def" : img.uid) + "|" + name + "|" + JSON.stringify(adj) + "|" + gain.map(v => v.toFixed(5)).join(",");
-  let e = bake.cache.get(key);
-  if (e) { bake.cache.delete(key); bake.cache.set(key, e); return e; }
-  // 表纹理
-  if (!S.inv) { S.inv = {mg: invTable(S.mg, 16384), yg: invTable(S.yg.T, 32768)}; }
-  const tab = new Float32Array(TAB_W * TAB_H);
-  const put = (row, arr, n) => tab.set(arr.subarray ? arr.subarray(0, n) : arr.slice(0, n), row * TAB_W);
-  const putLM = (row, lmT) => { for (let k = 0; k < 9; k++) for (let h = 0; h < 1024; h++) { tab[(row + k) * TAB_W + h] = lmT.M[9*h + k]; tab[(row + 9 + k) * TAB_W + h] = lmT.N[9*h + k]; } };
-  if (S.lm16) putLM(ROW.sLM, S.lm16);
-  if (D.lm16) putLM(ROW.dLM, D.lm16);
-  put(ROW.sMGi, S.inv.mg, 16384); put(ROW.dMG, D.mg, 16384);
-  put(ROW.sYGi, S.inv.yg, 16384); put(ROW.dYG, D.yg.T, 16384);
-  gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, bake.tab);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, TAB_W, TAB_H, 0, gl.RED, gl.FLOAT, tab);
-  // 3D LUT
+  const key = sk + "|" + name + "|" + JSON.stringify(adj) + "|" + gain.map(v => v.toFixed(5)).join(",");
+  let e = sonyCache.luts.get(key);
+  if (e) { sonyCache.luts.delete(key); sonyCache.luts.set(key, e); return e; }
+  const S = sonyLook(data, src, {}, true), D = sonyLook(data, name, adj, false);
+  let inv = sonyCache.inv.get(sk);
+  if (!inv) { inv = sonyInvert(S, LUTN); sonyCache.inv.set(sk, inv); if (sonyCache.inv.size > 4) sonyCache.inv.delete(sonyCache.inv.keys().next().value); }
   const tex = gl.createTexture();
   gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, tex);
-  gl.texImage2D(gl.TEXTURE_2D, 0, bake.f16 ? gl.RGBA16F : gl.RGBA8, LUTN * LUTN, LUTN, 0, gl.RGBA, bake.f16 ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE, null);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, LUTN * LUTN, LUTN, 0, gl.RGBA, gl.HALF_FLOAT, sonyForward(inv, D, gain, LUTN));
   for (const t of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D, t, gl.LINEAR);
   for (const t of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T]) gl.texParameteri(gl.TEXTURE_2D, t, gl.CLAMP_TO_EDGE);
-  gl.useProgram(bake.p);
-  const u = bake.u;
-  gl.uniform1i(u.uTab, 2); gl.uniform1f(u.uN, LUTN);
-  gl.uniform3fv(u.uGain, gain); gl.uniform3fv(u.uYc, D.ycoef);
-  gl.uniform3fv(u.uST, S.lm16 ? S.lm16.T : [0,0,0]); gl.uniform3fv(u.uDT, D.lm16 ? D.lm16.T : [0,0,0]);
-  gl.uniform4fv(u.uSk, S.P.k); gl.uniform4fv(u.uSg, S.P.g); gl.uniform4fv(u.uDk, D.P.k); gl.uniform4fv(u.uDg, D.P.g);
-  gl.uniform2f(u.uSLF, S.yg.L, S.yg.F); gl.uniform2f(u.uDLF, D.yg.L, D.yg.F);
-  gl.uniform1f(u.uSScale, S.lm16 ? S.lm16.scale : 0); gl.uniform1f(u.uDScale, D.lm16 ? D.lm16.scale : 0);
-  gl.uniform1f(u.uSEn, S.lm16 && S.lm16.enable ? 1 : 0); gl.uniform1f(u.uDEn, D.lm16 && D.lm16.enable ? 1 : 0);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, bake.fb);
-  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
-  gl.viewport(0, 0, LUTN * LUTN, LUTN);
-  gl.drawArrays(gl.TRIANGLES, 0, 3);                 // 一次绘制：x = B·33 + R，y = G
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  gl.useProgram(prog);
-  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, img.tex);
-  const lim = v => v === 1 ? 6 : v === 2 ? 4 : v === 3 ? 3 : 1e6;
-  e = {tex, clarDe: D.clarA - S.clarA, eff: D.mono, se: D.seAB, limA: lim(D.lim[0]), limB: D.lim[1] === 1 ? 6 : D.lim[1] === 2 ? 4 : D.lim[1] === 3 ? 3 : 1e6};
-  bake.cache.set(key, e);
-  if (bake.cache.size > 24) { const k = bake.cache.keys().next().value; gl.deleteTexture(bake.cache.get(k).tex); bake.cache.delete(k); }
+  gl.activeTexture(gl.TEXTURE0); if (img.tex) gl.bindTexture(gl.TEXTURE_2D, img.tex);
+  const slope = v => v === 1 ? 6 : v === 2 ? 4 : v === 3 ? 3 : 1e6;
+  e = {tex, clarDe: D.clarA - S.clarA, eff: D.mono, se: D.seAB, limA: slope(D.lim[0]), limB: slope(D.lim[1])};
+  sonyCache.luts.set(key, e);
+  if (sonyCache.luts.size > 24) { const k = sonyCache.luts.keys().next().value; gl.deleteTexture(sonyCache.luts.get(k).tex); sonyCache.luts.delete(k); }
   return e;
 }
 
