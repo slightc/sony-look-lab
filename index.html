@@ -81,6 +81,9 @@ button{font:inherit;color:inherit}
 .tbtn{height:30px;padding:0 10px;border-radius:5px;border:0;background:rgba(255,255,255,.1);color:var(--hud-text);cursor:pointer;font-size:13px;font-variant-numeric:tabular-nums}
 .tbtn:hover{background:rgba(255,255,255,.2)}
 .tbtn.on{background:var(--hud-text);color:#1c1e21}
+/* 长按（按住看原图、拖动）时不要触发文本选择 / 系统菜单 */
+.tbtn,#grip,#stage{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+#holdBtn{touch-action:none}
 .hidden{display:none!important}
 .btn.live{border-color:#e5484d;color:#e5484d}
 .btn.live::before{content:"";width:8px;height:8px;border-radius:50%;background:#e5484d}
@@ -1374,7 +1377,8 @@ grip.addEventListener("pointerup", () => grip._drag = false);
 grip.addEventListener("keydown", e => { if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); e.stopPropagation(); splitFrac = clamp(splitFrac + (e.key === "ArrowLeft" ? -.02 : .02), .02, .98); placeSplit(); requestRender(); } });
 const holdBtn = $("#holdBtn");
 const setHold = v => { holdOrig = v; holdBtn.classList.toggle("on", v); requestRender(); };
-holdBtn.addEventListener("pointerdown", e => { holdBtn.setPointerCapture(e.pointerId); setHold(true); });
+holdBtn.addEventListener("pointerdown", e => { e.preventDefault(); holdBtn.setPointerCapture(e.pointerId); setHold(true); });
+["contextmenu", "selectstart"].forEach(t => holdBtn.addEventListener(t, e => e.preventDefault()));
 ["pointerup","pointercancel","lostpointercapture"].forEach(t => holdBtn.addEventListener(t, () => setHold(false)));
 
 /* ---------------- Rendering ---------------- */
