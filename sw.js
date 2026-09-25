@@ -1,6 +1,6 @@
 // Service worker: offline app shell + font caching.
 // Bump VERSION whenever index.html or other shell files change.
-const VERSION = "v3";
+const VERSION = "v4";
 const SHELL = `shell-${VERSION}`;
 const RUNTIME = "runtime-fonts";
 const SHELL_FILES = [
@@ -56,8 +56,15 @@ self.addEventListener("fetch", e => {
     return;
   }
 
-  // Same-origin static files: cache first.
+  // Same-origin static files: cache first. Files not in the shell (the LibRaw decoder in
+  // vendor/, loaded only when a RAW file is opened) are cached on first use.
   if (url.origin === self.location.origin) {
-    e.respondWith(caches.match(req).then(hit => hit || fetch(req)));
+    e.respondWith((async () => {
+      const hit = await caches.match(req);
+      if (hit) return hit;
+      const res = await fetch(req);
+      if (res.ok && url.pathname.includes("/vendor/")) (await caches.open(SHELL)).put(req, res.clone());
+      return res;
+    })());
   }
 });
