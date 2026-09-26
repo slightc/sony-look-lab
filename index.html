@@ -1139,7 +1139,8 @@ function rawNodes(N, dom){                       // LUT 节点：sRGB 编码的�
    网格（0x100114820）：DefaultCrop 内按步长 4 取样的对数亮度 → 8×6 个单元、每单元 14×14 个样本 → 每单元 14 档直方图
    → 单元间平滑 → 档间平滑得 S0、Q。Edit 从 RAW CFA（白平衡之前、减黑电平）统计；这里从 LibRaw 的线性输出换回
    “A7M5 等效相机空间”再除以白平衡乘数（cam_mul）得到同一量。曲线（0x100117060）：10 个节点的分段三次 Bézier，
-   “自动”用 A7M5 SR2 的 0x781b/0x781c，Lv1–Lv5 为级别 25/40/55/70/85（MakerNote 0xb025 = 16–20 → (b025−15)·15+10），
+   “自动”用相机为这张照片写入的曲线（ARW 的 SR2 0x781b/0x781c；没有时按 Edit 的回退取级别 5），
+   Lv1–Lv5 为级别 25/40/55/70/85（MakerNote 0xb025 = 16–20 → (b025−15)·15+10），
    在 Edit 内置的级别表之间插值。逐像素部分在着色器里（droGain）。 */
 const DRO = (() => {
   const NX = 8, NY = 6, NC = 14, NB = 14, G70 = 12.999823570251465;
@@ -1158,9 +1159,6 @@ const DRO = (() => {
     145: [kn(1.554688, 2.554688, 2.555664), co(1.859375, 4.696289, 5.887695, 6.554688, 9.810547)],
     150: [kn(1.304688, 2.304688, 2.305664), co(2.050781, 4.492188, 5.887695, 6.554688, 9.829102)],
   };
-  const AUTO = [[0, 1, 1025, 5458, 6482, 6483, 9878, 10902, 12288, 13312],           // ILCE-7M5 SR2 0x781b / 0x781c（÷1024）
-                [0, 0, 0, 1, 342, 683, 1039, 2579, 4133, 5673, 6029, 6370, 6712, 6712, 6712, 6712, 7768, 8823, 9896, 10219, 10560, 10902, 11364, 11826, 12288, 12629, 12970, 13312]]
-               .map(a => a.map(v => v / 1024));
   const flat = t => t[0].concat(t[1]);
   const lerp = (a, b, f) => a.map((v, i) => v + (b[i] - v) * f);
   function row(i){                               // 0x100113800 的 11 行级别表：1–4、6–9 行 = 相邻常量行按 0.2 步长混合
@@ -1173,8 +1171,10 @@ const DRO = (() => {
     const a = lo === 10 ? row(10) : flat(TAB[lo]), b = flat(TAB[hi]);
     return lerp(a, b, (e - st) * (st === 145 ? 0.2 : 1 / 15));
   }
-  function curve(mode){                          // → 104 点（x_i = i·G70/104）
-    const [K0, C0] = mode === "auto" ? AUTO : (v => [v.slice(0, 10), v.slice(10)])(levelTable([25, 40, 55, 70, 85][+mode - 1]));
+  /* → 104 点（x_i = i·G70/104）。自动：用相机为这张照片写入的曲线（SR2 0x781b/0x781c），没有时按 Edit 的回退取级别 5 */
+  function curve(mode, shot){
+    const lv = mode === "auto" ? 5 : [25, 40, 55, 70, 85][+mode - 1];
+    const [K0, C0] = mode === "auto" && shot ? shot : (v => [v.slice(0, 10), v.slice(10)])(levelTable(lv));
     const out = new Float32Array(104);
     for (let i = 0; i < 104; i++) {
       const x = i * G70 / 104;
@@ -1238,7 +1238,50 @@ const DRO = (() => {
     }
     return {tex, geo: [ox, oy, sx * NC, sy * NC]};
   }
-  return {curve, grid, MODES: ["off", "auto", "1", "2", "3", "4", "5"]};
+  /* 相机的 DRO 自动曲线：ARW 的 SR2 私有数据（DNGPrivateData 0xc634 → 0x7200/0x7201 加密块，密钥 0x7221）里的
+     0x781b（10 个节点）/ 0x781c（28 个系数），÷1024。这是每张照片的拍摄数据（相机按场景算出），不是外观数据。 */
+  function shotCurve(u8){
+    try {
+      if (u8[0] !== 0x49 || u8[1] !== 0x49) return null;
+      const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+      const tags = (d, o, base) => {                 // 只取 SHORT/SSHORT/LONG 数组
+        const n = d.getUint16(o - base, true), r = {};
+        for (let i = 0; i < n; i++) {
+          const e = o - base + 2 + 12 * i, t = d.getUint16(e, true), ty = d.getUint16(e + 2, true), c = d.getUint32(e + 4, true);
+          const sz = ty === 4 ? 4 : ty === 3 || ty === 8 ? 2 : ty === 1 || ty === 7 ? 1 : 0;
+          if (!sz) continue;
+          const vo = sz * c <= 4 ? e + 8 : d.getUint32(e + 8, true) - base;
+          if (vo < 0 || vo + sz * c > d.byteLength) continue;
+          const v = [];
+          for (let k = 0; k < c; k++) v.push(sz === 4 ? d.getUint32(vo + 4 * k, true) : sz === 2 ? (ty === 8 ? d.getInt16(vo + 2 * k, true) : d.getUint16(vo + 2 * k, true)) : d.getUint8(vo + k));
+          r[t] = v;
+        }
+        return r;
+      };
+      const i0 = tags(dv, dv.getUint32(4, true), 0);
+      const pv = i0[0xc634];
+      if (!pv) return null;
+      const sp = tags(dv, pv.length >= 4 ? (pv[0] | pv[1] << 8 | pv[2] << 16 | pv[3] << 24) >>> 0 : pv[0], 0);
+      if (!sp[0x7200] || !sp[0x7201] || !sp[0x7221]) return null;
+      const off = sp[0x7200][0], len = sp[0x7201][0], kv = sp[0x7221];
+      if (off + len > u8.byteLength) return null;
+      let key = (kv[0] | kv[1] << 8 | kv[2] << 16 | kv[3] << 24) >>> 0;
+      const pad = new Uint32Array(128);                // Sony SR2 解密（与 LibRaw sony_decrypt 相同）
+      for (let q = 0; q < 4; q++) { key = (Math.imul(key, 48828125) + 1) >>> 0; pad[q] = key; }
+      pad[3] = ((pad[3] << 1) | ((pad[0] ^ pad[2]) >>> 31)) >>> 0;
+      for (let q = 4; q < 127; q++) pad[q] = (((pad[q - 4] ^ pad[q - 2]) << 1) | ((pad[q - 3] ^ pad[q - 1]) >>> 31)) >>> 0;
+      for (let q = 0; q < 127; q++) { const v = pad[q]; pad[q] = ((v & 0xff) << 24 | (v & 0xff00) << 8 | (v >>> 8) & 0xff00 | v >>> 24) >>> 0; }
+      const blk = u8.slice(off, off + len), bd = new DataView(blk.buffer);
+      for (let i = 0, q = 127; i + 4 <= len; i += 4) {
+        q++; pad[(q - 1) & 127] = (pad[q & 127] ^ pad[(q + 64) & 127]) >>> 0;
+        bd.setUint32(i, (bd.getUint32(i, true) ^ pad[(q - 1) & 127]) >>> 0, true);
+      }
+      const sub = tags(bd, off, off), kn = sub[0x781b], co = sub[0x781c];
+      if (!kn || kn.length < 10 || !co || co.length < 28 || !kn.slice(0, 10).some(v => v)) return null;
+      return [kn.slice(0, 10).map(v => v / 1024), co.slice(0, 28).map(v => v / 1024)];
+    } catch (e) { return null; }
+  }
+  return {curve, grid, shotCurve, MODES: ["off", "auto", "1", "2", "3", "4", "5"]};
 })();
 let sonyCache = null;
 function sonySource(){
@@ -1561,8 +1604,9 @@ async function loadFile(file){
       if (!pv.jpegOri || pv.jpegOri === 1) orient = meta.orientation || 1;
       try {
         busy.textContent = "正在解码 RAW：" + file.name + "…";
+        const shot = DRO.shotCurve(u8);                 // 先读：半尺寸解码会把 u8 转移给 Worker
         const im = await decodeRaw(u8);
-        if (im) { await setImageRaw(im, {orient: meta.orientation || 1, meta, kind: "RAW 解码", name: file.name}); return; }
+        if (im) { im.shot = shot; await setImageRaw(im, {orient: meta.orientation || 1, meta, kind: "RAW 解码", name: file.name}); return; }
       } catch (e) { console.warn("LibRaw 解码失败，改用嵌入预览", e); }
       busy.textContent = "正在解析 " + file.name + "…";
       if (!(pv.jpegOri && pv.jpegOri !== 1)) { orient = meta.orientation || 1; decodeOpts = {imageOrientation: "none"}; }
@@ -1672,20 +1716,22 @@ function droSetup(im){
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, 8 * 16, 6, 0, gl.RG, gl.FLOAT, g.tex);
     for (const t of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D, t, gl.NEAREST);
     gl.activeTexture(gl.TEXTURE0);
-    return {tex, geo: g.geo, map: [im.width * s, im.height * s, crop.x, crop.y]};
+    return {tex, geo: g.geo, map: [im.width * s, im.height * s, crop.x, crop.y], shot: im.shot || null};
   } catch (e) { console.warn("DRO 网格统计失败", e); return null; }
 }
 const droCurves = new Map();
 function droCurveTex(mode){
-  let t = droCurves.get(mode);
+  const shot = mode === "auto" && img.dro.shot, key = mode + (shot ? "|" + img.uid : "");
+  let t = droCurves.get(key);
   if (t) return t;
+  if (droCurves.size > 12) { const k = droCurves.keys().next().value; gl.deleteTexture(droCurves.get(k)); droCurves.delete(k); }
   t = gl.createTexture();
   gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, t);
   gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, 104, 1, 0, gl.RED, gl.FLOAT, DRO.curve(mode));
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, 104, 1, 0, gl.RED, gl.FLOAT, DRO.curve(mode, shot));
   for (const k of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D, k, gl.NEAREST);
   gl.activeTexture(gl.TEXTURE0);
-  droCurves.set(mode, t);
+  droCurves.set(key, t);
   return t;
 }
 const droOn = () => !!(img && img.linear && img.dro && state.dro && state.dro !== "off");
