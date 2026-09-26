@@ -100,7 +100,7 @@
   - 注意 `gamm` 必须传 6 个元素，否则会被忽略，输出就不是线性的。
 - 结果按 sRGB 编码存进 RGBA16F 纹理，保持传感器方向，显示时按 EXIF 方向旋转。
 - 超过纹理上限（手机 4096、桌面 8192）时用半尺寸解码。
-- 舍弃降噪、镜头畸变与色差校正，所以与 Edit 相比有少量几何偏差。DRO 可选，见 3.2.2。
+- 舍弃降噪、镜头畸变与色差校正，所以与 Edit 相比有少量几何偏差。DRO 可选，见 3.2.1。
 
 **解码失败、JPEG/PNG、摄像头：用嵌入预览**
 1. 解析 TIFF 结构（IFD0 / IFD 链 / SubIFD / Exif IFD），读取元数据和 `JPEGInterchangeFormat`、压缩类型为 6/7 的 Strip 作为候选。
@@ -152,7 +152,7 @@ RAW 路径：LibRaw 线性 sRGB → 固定矩阵 → 曝光 (×2^EV)、白平衡
 - **速度（RAW 路径，无头 Chromium + SwiftShader）**：打开 5～6 s（LibRaw 解码；嵌入预览约 1 s），全尺寸导出 9～10 s（嵌入预览约 5 s，图更大、半精度纹理在软件 GL 下较慢）。切换外观、拖动滑块只重算 LUT，与原来相当。
 - **速度**：在无头 Chromium + SwiftShader（软件 GL）下，全尺寸 7008×4672 导出耗时 ST 4.8 → 4.8 s，VV2 5.6 → 5.9 s（多了清晰度），SE 4.5 → 4.4 s。切换外观、拖动滑块的延迟与原来相当。
 
-### 3.2.2 DRO（D-Range Optimizer）
+### 3.2.1 DRO（D-Range Optimizer）
 
 移植自 Edit 的 ZcTaskVatr（sony-looks `sonylooks/pure/dro.py`）。只对 RAW 解码生效。
 
@@ -168,7 +168,7 @@ RAW 路径：LibRaw 线性 sRGB → 固定矩阵 → 曝光 (×2^EV)、白平衡
 - **核对**：曲线与纯 Python 版逐点一致（差 < 2e-6）；网格的局部亮度 t 与纯 Python 从 CFA 算的相比，A7M5 平均差 0.003 档，A7C II 0.015 档（A7C II 经过 A7M5 的固定矩阵）。
 - **速度**：开 DRO 后全尺寸导出约 15–20 s（无头 Chromium + SwiftShader，关 DRO 约 10 s），实时预览不受明显影响。
 
-### 3.2.1 原来的近似调色（创意风格与无 Sony 数据时）
+### 3.2.2 原来的近似调色（创意风格与无 Sony 数据时）
 
 ```
 源图 (sRGB)
