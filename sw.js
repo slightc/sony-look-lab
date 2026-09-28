@@ -1,6 +1,6 @@
 // Service worker: offline app shell + font caching.
 // Bump VERSION whenever index.html or other shell files change.
-const VERSION = "v6";
+const VERSION = "v7";
 const SHELL = `shell-${VERSION}`;
 const RUNTIME = "runtime-fonts";
 const SHELL_FILES = [
