@@ -116,6 +116,9 @@ button{font:inherit;color:inherit}
 .prow{display:grid;grid-template-columns:70px 26px minmax(0,1fr) 26px 38px;align-items:center;gap:6px;min-height:38px}
 .prow label{font-size:14px}
 .prow.off{opacity:.38;pointer-events:none}
+.chips.off{opacity:.38;pointer-events:none}
+.chips.c4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.hint{margin:8px 0 0;font-size:12.5px;color:var(--muted);line-height:1.5}
 .step{width:26px;height:26px;border-radius:5px;border:1px solid var(--line);background:var(--panel-2);cursor:pointer;font-size:15px;line-height:1;padding:0}
 .val{font-family:var(--cond);font-weight:600;font-size:16px;text-align:right;font-variant-numeric:tabular-nums;cursor:default}
 .val.nz{color:var(--accent)}
@@ -221,7 +224,8 @@ input[type=range]::-moz-range-thumb{width:13px;height:13px;border-radius:50%;bac
 
     <section class="sec">
       <div class="sec-h"><h3>动态范围优化<small>DRO，仅对 RAW 生效</small></h3></div>
-      <div class="chips" id="droModes" role="group" aria-label="动态范围优化"></div>
+      <div class="chips c4" id="droModes" role="group" aria-label="动态范围优化"></div>
+      <p class="hint" id="droHint"></p>
     </section>
 
     <section class="sec">
@@ -1281,7 +1285,18 @@ const DRO = (() => {
       return [kn.slice(0, 10).map(v => v / 1024), co.slice(0, 28).map(v => v / 1024)];
     } catch (e) { return null; }
   }
-  return {curve, grid, shotCurve, MODES: ["off", "auto", "1", "2", "3", "4", "5"]};
+  /* 网格上的平均增益（EV），按 S0 加权：用于在界面上提示这一档大约提亮多少 */
+  function meanEV(tex, C){
+    let sw = 0, se = 0;
+    for (let o = 0; o < tex.length; o += 2) {
+      const a = tex[o]; if (!(a > 1e-6)) continue;
+      const t = tex[o + 1] / a, t8 = t * 8, i = Math.floor(t8);
+      const val = i >= 103 || i < 0 ? C[103] : C[i] + (C[i + 1] - C[i]) * (t8 - i);
+      sw += a; se += a * (val - t);
+    }
+    return sw ? se / sw : 0;
+  }
+  return {curve, grid, shotCurve, meanEV, MODES: ["off", "auto", "1", "2", "3", "4", "5"]};
 })();
 let sonyCache = null;
 function sonySource(){
@@ -1607,7 +1622,8 @@ async function loadFile(file){
         const shot = DRO.shotCurve(u8);                 // 先读：半尺寸解码会把 u8 转移给 Worker
         const im = await decodeRaw(u8);
         if (im) { im.shot = shot; await setImageRaw(im, {orient: meta.orientation || 1, meta, kind: "RAW 解码", name: file.name}); return; }
-      } catch (e) { console.warn("LibRaw 解码失败，改用嵌入预览", e); }
+        toast("这个浏览器不支持浮点纹理，已改用嵌入预览（DRO 不可用）");
+      } catch (e) { console.warn("LibRaw 解码失败，改用嵌入预览", e); toast(location.protocol === "file:" ? "直接打开本地 index.html 时无法加载 RAW 解码器，请通过 http(s) 访问；已改用嵌入预览（DRO 不可用）" : "RAW 解码失败，已改用嵌入预览（DRO 不可用）"); }
       busy.textContent = "正在解析 " + file.name + "…";
       if (!(pv.jpegOri && pv.jpegOri !== 1)) { orient = meta.orientation || 1; decodeOpts = {imageOrientation: "none"}; }
     } else if (/jpe?g/i.test(file.type) || /\.jpe?g$/i.test(file.name)) {
@@ -1698,6 +1714,7 @@ async function setImageRaw(im, info){
   const dro = droSetup(im);
   finishImage(tex, im.width, im.height, im.width, im.height, info, true);
   img.dro = dro;
+  buildDRO();
 }
 /* DRO 网格：按 DefaultCrop（raw_inset_crops，没有则取整幅）与白平衡乘数统计一次，存成 RG32F 纹理（texelFetch，不需要浮点过滤） */
 function droSetup(im){
@@ -1716,7 +1733,7 @@ function droSetup(im){
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, 8 * 16, 6, 0, gl.RG, gl.FLOAT, g.tex);
     for (const t of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D, t, gl.NEAREST);
     gl.activeTexture(gl.TEXTURE0);
-    return {tex, geo: g.geo, map: [im.width * s, im.height * s, crop.x, crop.y], shot: im.shot || null};
+    return {tex, geo: g.geo, map: [im.width * s, im.height * s, crop.x, crop.y], shot: im.shot || null, grid: g.tex};
   } catch (e) { console.warn("DRO 网格统计失败", e); return null; }
 }
 const droCurves = new Map();
@@ -1844,6 +1861,7 @@ document.addEventListener("visibilitychange", () => { if (document.hidden && cam
 
 function fmtExp(t){ if (!t) return ""; if (t >= 1) return (Math.round(t * 10) / 10) + "″"; return "1/" + Math.round(1 / t); }
 function renderMeta(){
+  buildDRO();
   const m = img.meta, el = $("#meta");
   el.textContent = "";
   const add = (txt, cls) => { if (!txt) return; const s = document.createElement("span"); s.textContent = txt; if (cls) s.className = cls; el.appendChild(s); };
@@ -1967,9 +1985,28 @@ function buildDRO(){
     });
   }
   box.querySelectorAll(".chip").forEach(b => b.setAttribute("aria-pressed", b.dataset.id === (state.dro || "off")));
+  // 可用性与提示：DRO 只对 LibRaw 解码的 RAW、创意外观模式生效；其余情况置灰并说明原因
+  let msg = "", ok = false;
+  if (!img) msg = "打开 RAW 后可用。";
+  else if (img.live) msg = "摄像头画面不支持 DRO。";
+  else if (!img.linear) msg = "当前是“" + img.kind + "”，不是 RAW 解码，DRO 不起作用（JPEG 与嵌入预览已经带着相机自己的 DRO；RAW 解码失败时也会退回嵌入预览）。";
+  else if (!img.dro) msg = "这张 RAW 无法统计 DRO 网格。";
+  else if (state.mode !== "look") msg = "DRO 只在“创意外观”模式生效。";
+  else {
+    ok = true;
+    const m = state.dro || "off";
+    if (m !== "off") {
+      const ev = DRO.meanEV(img.dro.grid, DRO.curve(m, img.dro.shot)), evs = (ev > -0.005 ? "+" : "−") + Math.abs(ev).toFixed(2) + " EV";
+      msg = m === "auto" ? (img.dro.shot ? "自动：用相机为这张照片记录的曲线，全图平均提亮约 " + evs + "。" : "自动：文件里没有相机记录的曲线，按 Edit 的回退（级别 5），全图平均提亮约 " + evs + "。")
+                         : "Lv" + m + "：全图平均提亮约 " + evs + "（暗部更多）。";
+      if (Math.abs(ev) < 0.02) msg += "这张照片几乎没有变化。";
+    }
+  }
+  box.classList.toggle("off", !ok);
+  $("#droHint").textContent = msg;
 }
 function setMode(m){
-  state.mode = m; persist();
+  state.mode = m; persist(); buildDRO();
   $("#mLook").setAttribute("aria-pressed", m === "look"); $("#mStyle").setAttribute("aria-pressed", m === "style");
   buildTiles(); buildRows(); updateBadge(); requestRender();
 }
