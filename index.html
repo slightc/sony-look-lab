@@ -1684,7 +1684,7 @@ async function decodeRaw(u8){
   let raw = new LibRawCls();
   try {
     await raw.open(u8.slice(), opts);                 // open 会把缓冲区转移给 Worker，留一份原数组备用
-    const m = await raw.metadata();
+    const m = await raw.metadata(true);               // true：完整元数据（含 color_data.cam_mul、raw_inset_crops，DRO 网格要用）
     let half = false;
     if (Math.max(m.width || 0, m.height || 0) > texCap()) {       // 超过纹理上限：半尺寸解码（2×2 合一，也不需要插值）
       raw.dispose(); raw = new LibRawCls(); half = true;
