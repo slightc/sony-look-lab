@@ -1697,8 +1697,27 @@ async function decodeRaw(u8){
 }
 /* LibRaw 输出（线性 16 位 RGB）→ 按 sRGB 编码存进 RGBA16F 纹理：mipmap、清晰度底层、显示都与 JPEG 输入一致，
    只是精度更高（半精度浮点）。线性 → 外观的换算在 LUT 节点里完成（rawNodes）。 */
+/* DefaultCrop（LibRaw 的 raw_inset_crops）：LibRaw 输出的是传感器的整个可见区域，边上有不属于画面的像素
+   （例如 ILCE-7M5 为 7168×5120，画面只有 7008×4672，右侧与底部是黑边）。Edit 与机内都只输出 DefaultCrop，这里也裁掉。
+   返回裁切后的图像；im.inset 为 DefaultCrop 相对新图原点的传感器坐标（半尺寸解码时可能差 1 个传感器像素）。 */
+function cropRaw(im){
+  const m = (im.raw && im.raw.meta) || {}, s = im.raw && im.raw.half ? 2 : 1;
+  const W = im.width * s, H = im.height * s, ic = (m.raw_inset_crops || [])[0];
+  const cl = ic ? ic.cleft - (m.left_margin || 0) : 0, ct = ic ? ic.ctop - (m.top_margin || 0) : 0;
+  if (!(ic && ic.cwidth > 0 && ic.cheight > 0 && cl >= 0 && ct >= 0 && cl + ic.cwidth <= W && ct + ic.cheight <= H)) {
+    im.inset = {x: 0, y: 0, w: W, h: H};
+    return im;
+  }
+  const x0 = Math.ceil(cl / s), y0 = Math.ceil(ct / s), x1 = Math.floor((cl + ic.cwidth) / s), y1 = Math.floor((ct + ic.cheight) / s);
+  const w = x1 - x0, h = y1 - y0;
+  if (w === im.width && h === im.height) { im.inset = {x: cl, y: ct, w: ic.cwidth, h: ic.cheight}; return im; }
+  const src = im.data, data = new Uint16Array(w * h * 3);
+  for (let y = 0; y < h; y++) data.set(src.subarray(3 * ((y + y0) * im.width + x0), 3 * ((y + y0) * im.width + x0 + w)), 3 * y * w);
+  return Object.assign({}, im, {width: w, height: h, data, inset: {x: cl - x0 * s, y: ct - y0 * s, w: ic.cwidth, h: ic.cheight}});
+}
 async function setImageRaw(im, info){
   if (cam) stopCamera(false);
+  im = cropRaw(im);
   if (!halfLUT) {
     halfLUT = new Uint16Array(65536);
     for (let v = 0; v < 65536; v++) { const x = v / 65535; halfLUT[v] = f16(x <= 0.0031308 ? x * 12.92 : 1.055 * Math.pow(x, 1 / 2.4) - 0.055); }
@@ -1721,9 +1740,7 @@ function droSetup(im){
   if (img && img.dro) gl.deleteTexture(img.dro.tex);
   try {
     const m = (im.raw && im.raw.meta) || {}, s = im.raw && im.raw.half ? 2 : 1, cd = m.color_data || {};
-    const W = im.width * s, H = im.height * s, ic = (m.raw_inset_crops || [])[0];
-    const crop = ic && ic.cwidth > 0 && ic.cwidth <= 65000 && ic.cleft + ic.cwidth <= W + (m.left_margin || 0) && ic.ctop + ic.cheight <= H + (m.top_margin || 0)
-      ? {x: ic.cleft - (m.left_margin || 0), y: ic.ctop - (m.top_margin || 0), w: ic.cwidth, h: ic.cheight} : {x: 0, y: 0, w: W, h: H};
+    const crop = im.inset || {x: 0, y: 0, w: im.width * s, h: im.height * s};
     const cm = cd.cam_mul || [], mul = cm[0] > 0 && cm[1] > 0 && cm[2] > 0 ? [cm[0], cm[1], cm[2]] : [1, 1, 1];
     const g = DRO.grid(im, s, crop, mul);
     if (!g) return null;
