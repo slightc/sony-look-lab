@@ -1628,9 +1628,17 @@ async function loadFile(file){
       try {
         busy.textContent = "正在解码 RAW：" + file.name + "…";
         const sr2 = sonySR2(u8), shot = DRO.shotCurve(sr2);   // 先读：解码会把 u8 转移给 Worker
-        const im = await decodeRaw(u8, sr2);
-        if (im) { im.shot = shot; await setImageRaw(im, {orient: meta.orientation || 1, meta, kind: im.lut ? "RAW 解码（WebGPU）" : "RAW 解码", name: file.name}); return; }
-        toast("这个浏览器不支持浮点纹理，已改用嵌入预览（DRO 不可用）");
+        const info = im => ({orient: meta.orientation || 1, meta, kind: im.lut ? "RAW 解码（WebGPU）" : "RAW 解码", name: file.name});
+        let im = await decodeRaw(u8, sr2);
+        if (im) {
+          im.shot = shot;
+          if (await setImageRaw(im, info(im))) return;
+          im = null;                                    // 显存不够：改用半尺寸重试
+          busy.textContent = "显存不足，改用半尺寸解码：" + file.name + "…";
+          const im2 = await decodeRaw(u8, sr2, true);
+          if (im2) { im2.shot = shot; if (await setImageRaw(im2, info(im2))) { toast("显存不足，已按半尺寸解码"); return; } }
+          toast("显存不足，已改用嵌入预览（DRO 不可用）");
+        } else toast("这个浏览器不支持浮点纹理，已改用嵌入预览（DRO 不可用）");
       } catch (e) { console.warn("LibRaw 解码失败，改用嵌入预览", e); toast(location.protocol === "file:" ? "直接打开本地 index.html 时无法加载 RAW 解码器，请通过 http(s) 访问；已改用嵌入预览（DRO 不可用）" : "RAW 解码失败，已改用嵌入预览（DRO 不可用）"); }
       busy.textContent = "正在解析 " + file.name + "…";
       if (!(pv.jpegOri && pv.jpegOri !== 1)) { orient = meta.orientation || 1; decodeOpts = {imageOrientation: "none"}; }
@@ -1653,7 +1661,7 @@ async function loadFile(file){
   } finally { busy.classList.remove("on"); }
 }
 
-const texCap = () => Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE), /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent) ? 4096 : 8192);
+const texCap = () => Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE), 16384);   // 手机与桌面相同：只受 GPU 的纹理上限约束
 function texParams(){
   gl.generateMipmap(gl.TEXTURE_2D);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
@@ -1828,7 +1836,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   }
   return {device, params, develop};
 })();
-async function decodeRaw(u8, sr2){
+async function decodeRaw(u8, sr2, forceHalf){
   if (!gl.getExtension("EXT_color_buffer_float")) return null;   // 需要半精度浮点纹理生成 mipmap
   if (!LibRawCls) LibRawCls = (await import("./vendor/libraw/index.js")).default;
   // 拍摄白平衡、双线性去马赛克（-q 0）、线性 sRGB、16 位、不自动提亮、不做高光重建；
@@ -1837,24 +1845,21 @@ async function decodeRaw(u8, sr2){
   const opts = {useCameraWb: true, outputColor: 1, outputBps: 16, userQual: 0, noAutoBright: true, gamm: [1, 1, 0, 0, 0, 0], highlight: 0, userFlip: 0, adjustMaximumThr: 0};   // gamm 必须是 6 个元素（LibRaw params.gamm[6]），否则会被忽略
   let raw = new LibRawCls();
   try {
-    await raw.open(u8.slice(), opts);                 // open 会把缓冲区转移给 Worker，留一份原数组备用
-    const m = await raw.metadata();
-    const half = Math.max(m.width || 0, m.height || 0) > texCap();   // 超过纹理上限：半尺寸解码（2×2 合一，也不需要插值）
+    await raw.open(u8.slice(), opts);                 // open 会把缓冲区转移给 Worker，每次都传副本，原数组留作重试
+    const m = await raw.metadata(true);               // true：完整元数据（含 color_data.cam_mul、raw_inset_crops，DRO 网格要用）
+    const half = !!forceHalf || Math.max(m.width || 0, m.height || 0) > texCap();   // 超过纹理上限或显存不够：半尺寸解码（2×2 合一）
     let reopen = half;
-    const dev = await RAWGPU.device();
-    if (dev) {                                        // WebGPU：LibRaw 只解包，其余在 GPU 上算
-      const full = await raw.metadata(true), p = RAWGPU.params(full, sr2);
-      if (p) {
-        try {
-          reopen = true;                              // 解包之后这个实例不能再 dcraw_process
-          const im = await RAWGPU.develop(dev, await raw.rawImageData(), p, half);
-          if (im) { im.raw = {meta: m, half}; return im; }
-        } catch (e) { console.warn("WebGPU 解码失败，改用 LibRaw", e); }
-      }
+    const dev = await RAWGPU.device(), p = dev && RAWGPU.params(m, sr2);
+    if (p) {                                          // WebGPU：LibRaw 只解包，其余在 GPU 上算
+      try {
+        reopen = true;                                // 解包之后这个实例不能再 dcraw_process
+        const im = await RAWGPU.develop(dev, await raw.rawImageData(), p, half);
+        if (im) { im.raw = {meta: m, half}; return im; }
+      } catch (e) { console.warn("WebGPU 解码失败，改用 LibRaw", e); }
     }
     if (reopen) {
       raw.dispose(); raw = new LibRawCls();
-      await raw.open(u8, half ? Object.assign({halfSize: true}, opts) : opts);
+      await raw.open(u8.slice(), half ? Object.assign({halfSize: true}, opts) : opts);
     }
     const im = await raw.imageData();
     im.raw = {meta: m, half};
@@ -1862,38 +1867,58 @@ async function decodeRaw(u8, sr2){
   } finally { raw.dispose(); }
 }
 /* LibRaw 输出（线性 16 位 RGB）→ 按 sRGB 编码存进 RGBA16F 纹理：mipmap、清晰度底层、显示都与 JPEG 输入一致，
-   只是精度更高（半精度浮点）。线性 → 外观的换算在 LUT 节点里完成（rawNodes）。WebGPU 路径已经输出这种格式（im.lut）。 */
+   只是精度更高（半精度浮点）。线性 → 外观的换算在 LUT 节点里完成（rawNodes）。WebGPU 路径已经输出这种格式（im.lut），只做裁切。 */
+/* DefaultCrop（LibRaw 的 raw_inset_crops）：LibRaw 输出的是传感器的整个可见区域，边上有不属于画面的像素
+   （例如 ILCE-7M5 为 7168×5120，画面只有 7008×4672，右侧与底部是黑边）。Edit 与机内都只输出 DefaultCrop，这里也裁掉。
+   返回纹理在原图中的范围 (x0, y0, w, h)，以及 DefaultCrop 的传感器坐标（相对原图原点）。 */
+function rawInset(im){
+  const m = (im.raw && im.raw.meta) || {}, s = im.raw && im.raw.half ? 2 : 1;
+  const W = im.width * s, H = im.height * s, ic = (m.raw_inset_crops || [])[0];
+  const cl = ic ? ic.cleft - (m.left_margin || 0) : 0, ct = ic ? ic.ctop - (m.top_margin || 0) : 0;
+  if (!(ic && ic.cwidth > 0 && ic.cheight > 0 && cl >= 0 && ct >= 0 && cl + ic.cwidth <= W && ct + ic.cheight <= H))
+    return {s, x0: 0, y0: 0, w: im.width, h: im.height, crop: {x: 0, y: 0, w: W, h: H}};
+  const x0 = Math.ceil(cl / s), y0 = Math.ceil(ct / s);
+  return {s, x0, y0, w: Math.floor((cl + ic.cwidth) / s) - x0, h: Math.floor((ct + ic.cheight) / s) - y0, crop: {x: cl, y: ct, w: ic.cwidth, h: ic.cheight}};
+}
+/* 按行分块上传（不生成整幅的半精度数组，裁切在上传时完成），降低手机上全尺寸的峰值内存。显存不够时返回 false。 */
 async function setImageRaw(im, info){
   if (cam) stopCamera(false);
-  let px = im.data;
-  if (!im.lut) {
-    if (!halfLUT) {
-      halfLUT = new Uint16Array(65536);
-      for (let v = 0; v < 65536; v++) { const x = v / 65535; halfLUT[v] = f16(x <= 0.0031308 ? x * 12.92 : 1.055 * Math.pow(x, 1 / 2.4) - 0.055); }
-    }
-    const n = im.width * im.height, src = im.data, one = f16(1);
-    px = new Uint16Array(n * 4);
-    for (let i = 0, j = 0; i < n; i++, j += 3) { const o = 4 * i; px[o] = halfLUT[src[j]]; px[o + 1] = halfLUT[src[j + 1]]; px[o + 2] = halfLUT[src[j + 2]]; px[o + 3] = one; }
+  if (!halfLUT && !im.lut) {
+    halfLUT = new Uint16Array(65536);
+    for (let v = 0; v < 65536; v++) { const x = v / 65535; halfLUT[v] = f16(x <= 0.0031308 ? x * 12.92 : 1.055 * Math.pow(x, 1 / 2.4) - 0.055); }
   }
-  if (img && img.tex) gl.deleteTexture(img.tex);
+  const R = rawInset(im), w = R.w, h = R.h, src = im.data, W0 = im.width, one = f16(1);
+  if (img && img.tex) { gl.deleteTexture(img.tex); img.tex = null; }      // 先释放旧图，再分配新纹理
+  while (gl.getError() !== gl.NO_ERROR) {}
   const tex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, tex);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, im.width, im.height, 0, gl.RGBA, gl.HALF_FLOAT, px);
+  gl.texStorage2D(gl.TEXTURE_2D, Math.floor(Math.log2(Math.max(w, h))) + 1, gl.RGBA16F, w, h);
+  if (gl.getError() !== gl.NO_ERROR) { gl.deleteTexture(tex); return false; }
+  const B = 256, buf = new Uint16Array(w * B * 4);
+  for (let y = 0; y < h; y += B) {
+    const n = Math.min(B, h - y);
+    for (let r = 0; r < n; r++) {
+      const i = (y + r + R.y0) * W0 + R.x0;
+      if (im.lut) { buf.set(src.subarray(4 * i, 4 * (i + w)), 4 * r * w); continue; }
+      let j = 3 * i, o = 4 * r * w;
+      for (let x = 0; x < w; x++, j += 3, o += 4) { buf[o] = halfLUT[src[j]]; buf[o + 1] = halfLUT[src[j + 1]]; buf[o + 2] = halfLUT[src[j + 2]]; buf[o + 3] = one; }
+    }
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, y, w, n, gl.RGBA, gl.HALF_FLOAT, buf.subarray(0, 4 * w * n));
+  }
   texParams();
-  const dro = droSetup(im);
-  finishImage(tex, im.width, im.height, im.width, im.height, info, true);
+  if (gl.getError() !== gl.NO_ERROR) { gl.deleteTexture(tex); return false; }
+  const dro = droSetup(im, R);
+  finishImage(tex, w, h, w, h, info, true);
   img.dro = dro;
   buildDRO();
+  return true;
 }
-/* DRO 网格：按 DefaultCrop（raw_inset_crops，没有则取整幅）与白平衡乘数统计一次，存成 RG32F 纹理（texelFetch，不需要浮点过滤） */
-function droSetup(im){
+function droSetup(im, R){
   if (img && img.dro) gl.deleteTexture(img.dro.tex);
   try {
     const m = (im.raw && im.raw.meta) || {}, s = im.raw && im.raw.half ? 2 : 1, cd = m.color_data || {};
-    const W = im.width * s, H = im.height * s, ic = (m.raw_inset_crops || [])[0];
-    const crop = ic && ic.cwidth > 0 && ic.cwidth <= 65000 && ic.cleft + ic.cwidth <= W + (m.left_margin || 0) && ic.ctop + ic.cheight <= H + (m.top_margin || 0)
-      ? {x: ic.cleft - (m.left_margin || 0), y: ic.ctop - (m.top_margin || 0), w: ic.cwidth, h: ic.cheight} : {x: 0, y: 0, w: W, h: H};
+    const crop = R.crop;                              // 网格在原图（未裁切）上按 DefaultCrop 统计
     const cm = cd.cam_mul || [], mul = cm[0] > 0 && cm[1] > 0 && cm[2] > 0 ? [cm[0], cm[1], cm[2]] : [1, 1, 1];
     const g = DRO.grid(im, s, crop, mul);
     if (!g) return null;
@@ -1903,7 +1928,8 @@ function droSetup(im){
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, 8 * 16, 6, 0, gl.RG, gl.FLOAT, g.tex);
     for (const t of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D, t, gl.NEAREST);
     gl.activeTexture(gl.TEXTURE0);
-    return {tex, geo: g.geo, map: [im.width * s, im.height * s, crop.x, crop.y], shot: im.shot || null, grid: g.tex};
+    // 着色器：传感器坐标 = floor(uv·纹理尺寸·s) − (DefaultCrop 相对纹理原点的偏移)
+    return {tex, geo: g.geo, map: [R.w * s, R.h * s, crop.x - R.x0 * s, crop.y - R.y0 * s], shot: im.shot || null, grid: g.tex};
   } catch (e) { console.warn("DRO 网格统计失败", e); return null; }
 }
 const droCurves = new Map();
