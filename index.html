@@ -1139,6 +1139,48 @@ function rawNodes(N, dom){                       // LUT 节点：sRGB 编码的�
   return out;
 }
 
+/* ARW 的 SR2 私有数据：DNGPrivateData 0xc634 → 0x7200/0x7201 加密块（密钥 0x7221），解密后按 IFD 读出
+   （只取 SHORT/SSHORT/LONG 数组）。DRO 自动曲线（0x781b/0x781c）与黑电平（0x7310）都在这里。 */
+function sonySR2(u8){
+  try {
+    if (u8[0] !== 0x49 || u8[1] !== 0x49) return null;
+    const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    const tags = (d, o, base) => {
+      const n = d.getUint16(o - base, true), r = {};
+      for (let i = 0; i < n; i++) {
+        const e = o - base + 2 + 12 * i, t = d.getUint16(e, true), ty = d.getUint16(e + 2, true), c = d.getUint32(e + 4, true);
+        const sz = ty === 4 ? 4 : ty === 3 || ty === 8 ? 2 : ty === 1 || ty === 7 ? 1 : 0;
+        if (!sz) continue;
+        const vo = sz * c <= 4 ? e + 8 : d.getUint32(e + 8, true) - base;
+        if (vo < 0 || vo + sz * c > d.byteLength) continue;
+        const v = [];
+        for (let k = 0; k < c; k++) v.push(sz === 4 ? d.getUint32(vo + 4 * k, true) : sz === 2 ? (ty === 8 ? d.getInt16(vo + 2 * k, true) : d.getUint16(vo + 2 * k, true)) : d.getUint8(vo + k));
+        r[t] = v;
+      }
+      return r;
+    };
+    const i0 = tags(dv, dv.getUint32(4, true), 0);
+    const pv = i0[0xc634];
+    if (!pv) return null;
+    const sp = tags(dv, pv.length >= 4 ? (pv[0] | pv[1] << 8 | pv[2] << 16 | pv[3] << 24) >>> 0 : pv[0], 0);
+    if (!sp[0x7200] || !sp[0x7201] || !sp[0x7221]) return null;
+    const off = sp[0x7200][0], len = sp[0x7201][0], kv = sp[0x7221];
+    if (off + len > u8.byteLength) return null;
+    let key = (kv[0] | kv[1] << 8 | kv[2] << 16 | kv[3] << 24) >>> 0;
+    const pad = new Uint32Array(128);                // Sony SR2 解密（与 LibRaw sony_decrypt 相同）
+    for (let q = 0; q < 4; q++) { key = (Math.imul(key, 48828125) + 1) >>> 0; pad[q] = key; }
+    pad[3] = ((pad[3] << 1) | ((pad[0] ^ pad[2]) >>> 31)) >>> 0;
+    for (let q = 4; q < 127; q++) pad[q] = (((pad[q - 4] ^ pad[q - 2]) << 1) | ((pad[q - 3] ^ pad[q - 1]) >>> 31)) >>> 0;
+    for (let q = 0; q < 127; q++) { const v = pad[q]; pad[q] = ((v & 0xff) << 24 | (v & 0xff00) << 8 | (v >>> 8) & 0xff00 | v >>> 24) >>> 0; }
+    const blk = u8.slice(off, off + len), bd = new DataView(blk.buffer);
+    for (let i = 0, q = 127; i + 4 <= len; i += 4) {
+      q++; pad[(q - 1) & 127] = (pad[q & 127] ^ pad[(q + 64) & 127]) >>> 0;
+      bd.setUint32(i, (bd.getUint32(i, true) ^ pad[(q - 1) & 127]) >>> 0, true);
+    }
+    return tags(bd, off, off);
+  } catch (e) { return null; }
+}
+
 /* ---------------- DRO（D-Range Optimizer，Edit 的 ZcTaskVatr）----------------
    网格（0x100114820）：DefaultCrop 内按步长 4 取样的对数亮度 → 8×6 个单元、每单元 14×14 个样本 → 每单元 14 档直方图
    → 单元间平滑 → 档间平滑得 S0、Q。Edit 从 RAW CFA（白平衡之前、减黑电平）统计；这里从 LibRaw 的线性输出换回
@@ -1192,7 +1234,8 @@ const DRO = (() => {
   const LOG = new Float64Array(2049);             // log2 表：LOG[i] = log2(8i)，LOG[0] = 0（0x100114c10）
   for (let i = 1; i < 2049; i++) LOG[i] = Math.log2(i * 8);
   const logLut = v => { if (!(v > 0)) return 0; if (v >= 16384) return Math.log2(v); const t = v * 0.125, i = t | 0; return LOG[i] + (LOG[i + 1] - LOG[i]) * (t - i); };
-  /* im：LibRaw 线性 16 位 RGB；s：纹理像素对应的传感器像素数（半尺寸解码为 2）；crop：DefaultCrop（传感器坐标）；mul：cam_mul */
+  /* im：LibRaw 线性 16 位 RGB，或 WebGPU 输出的 RGBA16F（im.lut：半精度位 → 线性 ×65535）；
+     s：纹理像素对应的传感器像素数（半尺寸解码为 2）；crop：DefaultCrop（传感器坐标）；mul：cam_mul */
   function grid(im, s, crop, mul){
     const Wc = crop.w, Hc = crop.h;
     const sx = ((Wc >> 2) / (NX * NC) | 0) * 4, sy = ((Hc >> 2) / (NC * NY) | 0) * 4;
@@ -1203,17 +1246,18 @@ const DRO = (() => {
     // x_c = (raw_c − 黑电平)·(mul_c/min)·0.515625 → raw_c；再乘 Edit 的亮度权重（R 0.1495，G、B 0.057）
     const kr = 0.1495 * mn / (65535 * 0.515625 * mul[0]), kg = 0.057 * mn / (65535 * 0.515625 * mul[1]), kb = 0.057 * mn / (65535 * 0.515625 * mul[2]);
     const m00 = M[0][0], m01 = M[0][1], m02 = M[0][2], m10 = M[1][0], m11 = M[1][1], m12 = M[1][2], m20 = M[2][0], m21 = M[2][1], m22 = M[2][2];
-    const d = im.data, w = im.width, h = im.height, n2 = s === 1 ? 2 : 1;
+    const d = im.data, L = im.lut, w = im.width, h = im.height, n2 = s === 1 ? 2 : 1, st = L ? 4 : 3;
     const col = new Int32Array(lw * n2), smp = new Float64Array(nb * nk), wb = 1 / (bx * by);
-    for (let i = 0; i < lw; i++) for (let q = 0; q < n2; q++) col[i * n2 + q] = 3 * Math.min(w - 1, Math.max(0, Math.floor((ox + 4 * i + crop.x) / s) + q));
+    for (let i = 0; i < lw; i++) for (let q = 0; q < n2; q++) col[i * n2 + q] = st * Math.min(w - 1, Math.max(0, Math.floor((ox + 4 * i + crop.x) / s) + q));
     for (let j = 0; j < lh; j++) {
       const Y0 = Math.floor((oy + 4 * j + crop.y) / s), rows = [];
-      for (let q = 0; q < n2; q++) rows.push(Math.min(h - 1, Math.max(0, Y0 + q)) * w * 3);
+      for (let q = 0; q < n2; q++) rows.push(Math.min(h - 1, Math.max(0, Y0 + q)) * w * st);
       const srow = Math.floor(j / by) * nk;
       for (let i = 0; i < lw; i++) {
         let r = 0, g = 0, b = 0;
         for (let qy = 0; qy < n2; qy++) for (let qx = 0; qx < n2; qx++) {   // 全尺寸：2×2 拜耳块位置的均值
-          const o = rows[qy] + col[i * n2 + qx]; r += d[o]; g += d[o + 1]; b += d[o + 2];
+          const o = rows[qy] + col[i * n2 + qx];
+          if (L) { r += L[d[o]]; g += L[d[o + 1]]; b += L[d[o + 2]]; } else { r += d[o]; g += d[o + 1]; b += d[o + 2]; }
         }
         const R = m00 * r + m01 * g + m02 * b, G = m10 * r + m11 * g + m12 * b, B = m20 * r + m21 * g + m22 * b;
         const v = ((R > 0 ? R * kr : 0) + (G > 0 ? G * kg : 0) + (B > 0 ? B * kb : 0)) / (n2 * n2);
@@ -1242,48 +1286,12 @@ const DRO = (() => {
     }
     return {tex, geo: [ox, oy, sx * NC, sy * NC]};
   }
-  /* 相机的 DRO 自动曲线：ARW 的 SR2 私有数据（DNGPrivateData 0xc634 → 0x7200/0x7201 加密块，密钥 0x7221）里的
-     0x781b（10 个节点）/ 0x781c（28 个系数），÷1024。这是每张照片的拍摄数据（相机按场景算出），不是外观数据。 */
-  function shotCurve(u8){
-    try {
-      if (u8[0] !== 0x49 || u8[1] !== 0x49) return null;
-      const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
-      const tags = (d, o, base) => {                 // 只取 SHORT/SSHORT/LONG 数组
-        const n = d.getUint16(o - base, true), r = {};
-        for (let i = 0; i < n; i++) {
-          const e = o - base + 2 + 12 * i, t = d.getUint16(e, true), ty = d.getUint16(e + 2, true), c = d.getUint32(e + 4, true);
-          const sz = ty === 4 ? 4 : ty === 3 || ty === 8 ? 2 : ty === 1 || ty === 7 ? 1 : 0;
-          if (!sz) continue;
-          const vo = sz * c <= 4 ? e + 8 : d.getUint32(e + 8, true) - base;
-          if (vo < 0 || vo + sz * c > d.byteLength) continue;
-          const v = [];
-          for (let k = 0; k < c; k++) v.push(sz === 4 ? d.getUint32(vo + 4 * k, true) : sz === 2 ? (ty === 8 ? d.getInt16(vo + 2 * k, true) : d.getUint16(vo + 2 * k, true)) : d.getUint8(vo + k));
-          r[t] = v;
-        }
-        return r;
-      };
-      const i0 = tags(dv, dv.getUint32(4, true), 0);
-      const pv = i0[0xc634];
-      if (!pv) return null;
-      const sp = tags(dv, pv.length >= 4 ? (pv[0] | pv[1] << 8 | pv[2] << 16 | pv[3] << 24) >>> 0 : pv[0], 0);
-      if (!sp[0x7200] || !sp[0x7201] || !sp[0x7221]) return null;
-      const off = sp[0x7200][0], len = sp[0x7201][0], kv = sp[0x7221];
-      if (off + len > u8.byteLength) return null;
-      let key = (kv[0] | kv[1] << 8 | kv[2] << 16 | kv[3] << 24) >>> 0;
-      const pad = new Uint32Array(128);                // Sony SR2 解密（与 LibRaw sony_decrypt 相同）
-      for (let q = 0; q < 4; q++) { key = (Math.imul(key, 48828125) + 1) >>> 0; pad[q] = key; }
-      pad[3] = ((pad[3] << 1) | ((pad[0] ^ pad[2]) >>> 31)) >>> 0;
-      for (let q = 4; q < 127; q++) pad[q] = (((pad[q - 4] ^ pad[q - 2]) << 1) | ((pad[q - 3] ^ pad[q - 1]) >>> 31)) >>> 0;
-      for (let q = 0; q < 127; q++) { const v = pad[q]; pad[q] = ((v & 0xff) << 24 | (v & 0xff00) << 8 | (v >>> 8) & 0xff00 | v >>> 24) >>> 0; }
-      const blk = u8.slice(off, off + len), bd = new DataView(blk.buffer);
-      for (let i = 0, q = 127; i + 4 <= len; i += 4) {
-        q++; pad[(q - 1) & 127] = (pad[q & 127] ^ pad[(q + 64) & 127]) >>> 0;
-        bd.setUint32(i, (bd.getUint32(i, true) ^ pad[(q - 1) & 127]) >>> 0, true);
-      }
-      const sub = tags(bd, off, off), kn = sub[0x781b], co = sub[0x781c];
-      if (!kn || kn.length < 10 || !co || co.length < 28 || !kn.slice(0, 10).some(v => v)) return null;
-      return [kn.slice(0, 10).map(v => v / 1024), co.slice(0, 28).map(v => v / 1024)];
-    } catch (e) { return null; }
+  /* 相机的 DRO 自动曲线：SR2 私有数据（sonySR2）里的 0x781b（10 个节点）/ 0x781c（28 个系数），÷1024。
+     这是每张照片的拍摄数据（相机按场景算出），不是外观数据。 */
+  function shotCurve(sub){
+    const kn = sub && sub[0x781b], co = sub && sub[0x781c];
+    if (!kn || kn.length < 10 || !co || co.length < 28 || !kn.slice(0, 10).some(v => v)) return null;
+    return [kn.slice(0, 10).map(v => v / 1024), co.slice(0, 28).map(v => v / 1024)];
   }
   /* 网格上的平均增益（EV），按 S0 加权：用于在界面上提示这一档大约提亮多少 */
   function meanEV(tex, C){
@@ -1619,16 +1627,16 @@ async function loadFile(file){
       if (!pv.jpegOri || pv.jpegOri === 1) orient = meta.orientation || 1;
       try {
         busy.textContent = "正在解码 RAW：" + file.name + "…";
-        const shot = DRO.shotCurve(u8);                 // 先读：半尺寸解码会把 u8 转移给 Worker
-        const info = {orient: meta.orientation || 1, meta, kind: "RAW 解码", name: file.name};
-        let im = await decodeRaw(u8);
+        const sr2 = sonySR2(u8), shot = DRO.shotCurve(sr2);   // 先读：解码会把 u8 转移给 Worker
+        const info = im => ({orient: meta.orientation || 1, meta, kind: im.lut ? "RAW 解码（WebGPU）" : "RAW 解码", name: file.name});
+        let im = await decodeRaw(u8, sr2);
         if (im) {
           im.shot = shot;
-          if (await setImageRaw(im, info)) return;
+          if (await setImageRaw(im, info(im))) return;
           im = null;                                    // 显存不够：改用半尺寸重试
           busy.textContent = "显存不足，改用半尺寸解码：" + file.name + "…";
-          const im2 = await decodeRaw(u8, true);
-          if (im2) { im2.shot = shot; if (await setImageRaw(im2, info)) { toast("显存不足，已按半尺寸解码"); return; } }
+          const im2 = await decodeRaw(u8, sr2, true);
+          if (im2) { im2.shot = shot; if (await setImageRaw(im2, info(im2))) { toast("显存不足，已按半尺寸解码"); return; } }
           toast("显存不足，已改用嵌入预览（DRO 不可用）");
         } else toast("这个浏览器不支持浮点纹理，已改用嵌入预览（DRO 不可用）");
       } catch (e) { console.warn("LibRaw 解码失败，改用嵌入预览", e); toast(location.protocol === "file:" ? "直接打开本地 index.html 时无法加载 RAW 解码器，请通过 http(s) 访问；已改用嵌入预览（DRO 不可用）" : "RAW 解码失败，已改用嵌入预览（DRO 不可用）"); }
@@ -1683,20 +1691,175 @@ async function setImage(bmp, info){
 }
 /* ---------------- RAW 解码（LibRaw WASM，vendor/libraw） ---------------- */
 let LibRawCls = null, halfLUT = null;
-async function decodeRaw(u8, forceHalf){
+/* WebGPU 显影：LibRaw 只解包（rawImageData：未去马赛克的 16 位 CFA），其余按 LibRaw dcraw_process 的同一套步骤
+   在计算着色器里完成：减黑电平 → 白平衡缩放（scale_colors，裁到 65535）→ 双线性去马赛克（lin_interpolate，
+   边缘 1 像素按 border_interpolate）或半尺寸 2×2 合并（两个 G 取平均）→ rgb_cam 转线性 sRGB（裁到 0..65535）
+   → sRGB 编码 → RGBA16F，与 setImageRaw 的纹理格式相同，读回后直接上传 WebGL。
+   只接 Sony 的 3 色拜耳 RAW：LibRaw 的元数据里没有逐通道黑电平（cblack），Sony 的可从 SR2 0x7310 读到；
+   其余情况（或 WebGPU 不可用、出错）返回 null，走 LibRaw 的 CPU 路径。 */
+const RAWGPU = (() => {
+  const WGSL = `
+struct P {
+  w: u32, h: u32, rw: u32, top: u32,
+  left: u32, y0: u32, rows: u32, filters: u32,
+  half: u32, ow: u32, pad0: u32, pad1: u32,
+  black: vec4f, scale: vec4f,                          // 按 CFA 颜色 0–3（R、G、B、G2）
+  m0: vec4f, m1: vec4f, m2: vec4f,                     // rgb_cam 的三行
+};
+@group(0) @binding(0) var<storage, read> raw: array<u32>;          // raw_image，两个 16 位像素一个字
+@group(0) @binding(1) var<storage, read_write> outp: array<vec2u>; // RGBA16F
+@group(0) @binding(2) var<uniform> p: P;
+
+fn fc(y: u32, x: u32) -> u32 { return (p.filters >> ((((y << 1u) & 14u) | (x & 1u)) << 1u)) & 3u; }
+fn smp(y: u32, x: u32, c: u32) -> f32 {                // 可见区坐标；c 为这个位置的 CFA 颜色
+  let i = (y + p.top) * p.rw + x + p.left;
+  let v = f32((raw[i >> 1u] >> ((i & 1u) * 16u)) & 0xffffu);
+  return min(floor(max(v - p.black[c], 0.0) * p.scale[c]), 65535.0);     // 与 LibRaw 一样按整数截断
+}
+fn enc(v: f32) -> f32 {
+  let x = clamp(v / 65535.0, 0.0, 1.0);
+  return select(1.055 * pow(x, 1.0 / 2.4) - 0.055, x * 12.92, x <= 0.0031308);
+}
+@compute @workgroup_size(16, 16)
+fn main(@builtin(global_invocation_id) id: vec3u) {
+  let x = id.x;
+  if (x >= p.ow || id.y >= p.rows) { return; }
+  let y = id.y + p.y0;
+  var rgb = vec3f(0.0);
+  if (p.half == 1u) {
+    var ch = vec4f(0.0);
+    for (var dy = 0u; dy < 2u; dy++) {
+      for (var dx = 0u; dx < 2u; dx++) {
+        let yy = 2u * y + dy; let xx = 2u * x + dx;
+        if (yy < p.h && xx < p.w) { let c = fc(yy, xx); ch[c] = smp(yy, xx, c); }
+      }
+    }
+    rgb = vec3f(ch.x, floor((ch.y + ch.w) * 0.5), ch.z);
+  } else {
+    let f0 = fc(y, x); let f = select(f0, 1u, f0 == 3u);
+    let edge = x == 0u || y == 0u || x + 1u >= p.w || y + 1u >= p.h;
+    var s = vec3f(0.0); var n = vec3f(0.0);
+    for (var dy = -1; dy <= 1; dy++) {
+      for (var dx = -1; dx <= 1; dx++) {
+        let yy = i32(y) + dy; let xx = i32(x) + dx;
+        if (yy < 0 || xx < 0 || yy >= i32(p.h) || xx >= i32(p.w)) { continue; }
+        let c0 = fc(u32(yy), u32(xx)); let c = select(c0, 1u, c0 == 3u);
+        if (c == f) { continue; }
+        let wt = select(select(1.0, 2.0, dy == 0 || dx == 0), 1.0, edge);   // 内部：上下左右 2、对角 1；边缘等权
+        s[c] += wt * smp(u32(yy), u32(xx), c0); n[c] += wt;
+      }
+    }
+    rgb = floor(s / max(n, vec3f(1.0)));
+    rgb[f] = smp(y, x, f0);
+  }
+  let o = clamp(floor(vec3f(dot(p.m0.xyz, rgb), dot(p.m1.xyz, rgb), dot(p.m2.xyz, rgb))), vec3f(0.0), vec3f(65535.0));
+  outp[id.y * p.ow + x] = vec2u(pack2x16float(vec2f(enc(o.x), enc(o.y))), pack2x16float(vec2f(enc(o.z), 1.0)));
+}`;
+  let devP = null, lin = null;
+  const pipes = new WeakMap();
+  function device(){
+    if (!navigator.gpu) return Promise.resolve(null);
+    if (!devP) devP = (async () => {
+      const ad = await navigator.gpu.requestAdapter();
+      if (!ad || (ad.info && ad.info.isFallbackAdapter)) return null;   // 软件实现（如 SwiftShader）比 LibRaw 还慢
+      const L = ad.limits;
+      const dev = await ad.requestDevice({requiredLimits: {maxStorageBufferBindingSize: L.maxStorageBufferBindingSize, maxBufferSize: L.maxBufferSize}});
+      dev.lost.then(() => { devP = null; });
+      return dev;
+    })().catch(e => { console.warn("WebGPU 不可用", e); return null; });
+    return devP;
+  }
+  /* 与 LibRaw 相同的参数：黑电平（0x7310 为 RGGB 顺序，LibRaw 取最小值作 black、余量作 cblack）、
+     白点 maximum − black、拍摄白平衡 pre_mul = cam_mul（按最小值归一）、rgb_cam。不满足条件返回 null。 */
+  function params(m, sr2){
+    const cd = m.color_data || {}, f = m.filters >>> 0, cm = cd.cam_mul || [], rc = cd.rgb_cam;
+    if (m.camera_make !== "Sony" || m.colors !== 3 || f < 1000 || m.pixel_aspect !== 1 || !rc || !(cm[0] > 0 && cm[2] > 0)) return null;
+    const t = sr2 && sr2[0x7310];
+    const black = t && t.length >= 4 ? [t[0], t[1], t[3], t[2]] : [cd.black, cd.black, cd.black, cd.black];
+    if (Math.min(...black) !== cd.black) return null;              // 与 LibRaw 的黑电平对不上：不猜，交给 LibRaw
+    const white = cd.maximum - cd.black, pre = [cm[0], cm[1] || 1, cm[2], cm[3] || cm[1] || 1], mn = Math.min(...pre);
+    if (!(white > 0)) return null;
+    return {filters: f, black, scale: pre.map(v => v / mn * 65535 / white), cam: rc};
+  }
+  function linLUT(){                                   // 半精度位（sRGB 编码）→ 线性 ×65535，给 DRO 网格用
+    if (lin) return lin;
+    lin = new Float32Array(65536);
+    for (let h = 0; h < 0x7c00; h++) {
+      const e = h >> 10, v = e ? (1 + (h & 1023) / 1024) * 2 ** (e - 15) : (h & 1023) * 2 ** -24;
+      lin[h] = 65535 * (v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
+    }
+    return lin;
+  }
+  async function develop(dev, r, p, half){
+    const W = r.width, H = r.height, RW = r.raw_width;
+    if (!r.data || r.data.length < RW * r.raw_height || r.top_margin + H > r.raw_height || r.left_margin + W > RW) return null;
+    const ow = half ? (W + 1) >> 1 : W, oh = half ? (H + 1) >> 1 : H, lim = dev.limits;
+    const inBytes = Math.ceil(r.data.byteLength / 4) * 4, cap = Math.min(lim.maxStorageBufferBindingSize, lim.maxBufferSize);
+    if (inBytes > cap) return null;
+    const rows = Math.max(1, Math.min(oh, Math.floor(Math.min(64 << 20, cap) / (ow * 8))));   // 分条输出，每条 ≤ 64 MB
+    let pipe = pipes.get(dev);
+    if (!pipe) pipes.set(dev, pipe = await dev.createComputePipelineAsync({layout: "auto", compute: {module: dev.createShaderModule({code: WGSL}), entryPoint: "main"}}));
+    dev.pushErrorScope("out-of-memory"); dev.pushErrorScope("validation");
+    const src = dev.createBuffer({size: inBytes, usage: GPUBufferUsage.STORAGE, mappedAtCreation: true});
+    const out = dev.createBuffer({size: rows * ow * 8, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC});
+    const rd = dev.createBuffer({size: rows * ow * 8, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
+    const uni = dev.createBuffer({size: 128, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
+    let px = null, fail = null;
+    try {
+      new Uint16Array(src.getMappedRange()).set(r.data); src.unmap();
+      r.data = null;
+      const bg = dev.createBindGroup({layout: pipe.getBindGroupLayout(0), entries: [src, out, uni].map((buffer, binding) => ({binding, resource: {buffer}}))});
+      const u = new ArrayBuffer(128), ui = new Uint32Array(u), uf = new Float32Array(u);
+      ui.set([W, H, RW, r.top_margin, r.left_margin, 0, 0, p.filters, half ? 1 : 0, ow]);
+      uf.set(p.black, 12); uf.set(p.scale, 16);
+      for (let i = 0; i < 3; i++) uf.set(p.cam[i].slice(0, 3), 20 + 4 * i);
+      px = new Uint16Array(ow * oh * 4);
+      for (let y0 = 0; y0 < oh; y0 += rows) {
+        const n = Math.min(rows, oh - y0), bytes = n * ow * 8;
+        ui[5] = y0; ui[6] = n;
+        dev.queue.writeBuffer(uni, 0, u);
+        const enc = dev.createCommandEncoder(), pass = enc.beginComputePass();
+        pass.setPipeline(pipe); pass.setBindGroup(0, bg);
+        pass.dispatchWorkgroups(Math.ceil(ow / 16), Math.ceil(n / 16)); pass.end();
+        enc.copyBufferToBuffer(out, 0, rd, 0, bytes);
+        dev.queue.submit([enc.finish()]);
+        await rd.mapAsync(GPUMapMode.READ, 0, bytes);
+        px.set(new Uint16Array(rd.getMappedRange(0, bytes)), y0 * ow * 4);
+        rd.unmap();
+      }
+    } catch (e) { fail = e; }
+    const errs = [await dev.popErrorScope(), await dev.popErrorScope()].filter(Boolean);
+    for (const b of [src, out, rd, uni]) b.destroy();
+    if (fail) throw fail;
+    if (errs.length) throw new Error(errs.map(e => e.message).join("; "));
+    return {width: ow, height: oh, data: px, lut: linLUT()};
+  }
+  return {device, params, develop};
+})();
+async function decodeRaw(u8, sr2, forceHalf){
   if (!gl.getExtension("EXT_color_buffer_float")) return null;   // 需要半精度浮点纹理生成 mipmap
   if (!LibRawCls) LibRawCls = (await import("./vendor/libraw/index.js")).default;
   // 拍摄白平衡、双线性去马赛克（-q 0）、线性 sRGB、16 位、不自动提亮、不做高光重建；
-  // 不旋转（userFlip 0）：纹理保持传感器方向（清晰度的块网格按传感器方向锚定），显示时按 EXIF 方向旋转
-  const opts = {useCameraWb: true, outputColor: 1, outputBps: 16, userQual: 0, noAutoBright: true, gamm: [1, 1, 0, 0, 0, 0], highlight: 0, userFlip: 0};   // gamm 必须是 6 个元素（LibRaw params.gamm[6]），否则会被忽略
+  // 不旋转（userFlip 0）：纹理保持传感器方向（清晰度的块网格按传感器方向锚定），显示时按 EXIF 方向旋转；
+  // adjustMaximumThr 0：白点固定用相机的 maximum（LibRaw 默认会在最亮像素高于 75% 时改用它当白点，亮度随照片变化）
+  const opts = {useCameraWb: true, outputColor: 1, outputBps: 16, userQual: 0, noAutoBright: true, gamm: [1, 1, 0, 0, 0, 0], highlight: 0, userFlip: 0, adjustMaximumThr: 0};   // gamm 必须是 6 个元素（LibRaw params.gamm[6]），否则会被忽略
   let raw = new LibRawCls();
   try {
     await raw.open(u8.slice(), opts);                 // open 会把缓冲区转移给 Worker，每次都传副本，原数组留作重试
     const m = await raw.metadata(true);               // true：完整元数据（含 color_data.cam_mul、raw_inset_crops，DRO 网格要用）
-    let half = false;
-    if (forceHalf || Math.max(m.width || 0, m.height || 0) > texCap()) {   // 超过纹理上限或显存不够：半尺寸解码（2×2 合一）
-      raw.dispose(); raw = new LibRawCls(); half = true;
-      await raw.open(u8.slice(), Object.assign({halfSize: true}, opts));
+    const half = !!forceHalf || Math.max(m.width || 0, m.height || 0) > texCap();   // 超过纹理上限或显存不够：半尺寸解码（2×2 合一）
+    let reopen = half;
+    const dev = await RAWGPU.device(), p = dev && RAWGPU.params(m, sr2);
+    if (p) {                                          // WebGPU：LibRaw 只解包，其余在 GPU 上算
+      try {
+        reopen = true;                                // 解包之后这个实例不能再 dcraw_process
+        const im = await RAWGPU.develop(dev, await raw.rawImageData(), p, half);
+        if (im) { im.raw = {meta: m, half}; return im; }
+      } catch (e) { console.warn("WebGPU 解码失败，改用 LibRaw", e); }
+    }
+    if (reopen) {
+      raw.dispose(); raw = new LibRawCls();
+      await raw.open(u8.slice(), half ? Object.assign({halfSize: true}, opts) : opts);
     }
     const im = await raw.imageData();
     im.raw = {meta: m, half};
@@ -1704,7 +1867,7 @@ async function decodeRaw(u8, forceHalf){
   } finally { raw.dispose(); }
 }
 /* LibRaw 输出（线性 16 位 RGB）→ 按 sRGB 编码存进 RGBA16F 纹理：mipmap、清晰度底层、显示都与 JPEG 输入一致，
-   只是精度更高（半精度浮点）。线性 → 外观的换算在 LUT 节点里完成（rawNodes）。 */
+   只是精度更高（半精度浮点）。线性 → 外观的换算在 LUT 节点里完成（rawNodes）。WebGPU 路径已经输出这种格式（im.lut），只做裁切。 */
 /* DefaultCrop（LibRaw 的 raw_inset_crops）：LibRaw 输出的是传感器的整个可见区域，边上有不属于画面的像素
    （例如 ILCE-7M5 为 7168×5120，画面只有 7008×4672，右侧与底部是黑边）。Edit 与机内都只输出 DefaultCrop，这里也裁掉。
    返回纹理在原图中的范围 (x0, y0, w, h)，以及 DefaultCrop 的传感器坐标（相对原图原点）。 */
@@ -1720,7 +1883,7 @@ function rawInset(im){
 /* 按行分块上传（不生成整幅的半精度数组，裁切在上传时完成），降低手机上全尺寸的峰值内存。显存不够时返回 false。 */
 async function setImageRaw(im, info){
   if (cam) stopCamera(false);
-  if (!halfLUT) {
+  if (!halfLUT && !im.lut) {
     halfLUT = new Uint16Array(65536);
     for (let v = 0; v < 65536; v++) { const x = v / 65535; halfLUT[v] = f16(x <= 0.0031308 ? x * 12.92 : 1.055 * Math.pow(x, 1 / 2.4) - 0.055); }
   }
@@ -1736,7 +1899,9 @@ async function setImageRaw(im, info){
   for (let y = 0; y < h; y += B) {
     const n = Math.min(B, h - y);
     for (let r = 0; r < n; r++) {
-      let j = 3 * ((y + r + R.y0) * W0 + R.x0), o = 4 * r * w;
+      const i = (y + r + R.y0) * W0 + R.x0;
+      if (im.lut) { buf.set(src.subarray(4 * i, 4 * (i + w)), 4 * r * w); continue; }
+      let j = 3 * i, o = 4 * r * w;
       for (let x = 0; x < w; x++, j += 3, o += 4) { buf[o] = halfLUT[src[j]]; buf[o + 1] = halfLUT[src[j + 1]]; buf[o + 2] = halfLUT[src[j + 2]]; buf[o + 3] = one; }
     }
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, y, w, n, gl.RGBA, gl.HALF_FLOAT, buf.subarray(0, 4 * w * n));
